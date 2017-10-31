@@ -7,6 +7,10 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "APAP", "APAP\APAP.vcxproj",
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "PTIS", "PTIS\PTIS.vcxproj", "{5224A848-95F0-4703-99FC-89B9119C6273}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "APAPFolder", "APAPFolder", "{E5A479B4-A655-4E80-B851-F5BA7369DCD1}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "PTISFolder", "PTISFolder", "{3114B86A-9F6B-4A93-8B67-93E0C3E65CFB}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -34,5 +38,9 @@ Global
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{563A7CB9-5068-4506-8A88-60A263B6F8B1} = {E5A479B4-A655-4E80-B851-F5BA7369DCD1}
+		{5224A848-95F0-4703-99FC-89B9119C6273} = {3114B86A-9F6B-4A93-8B67-93E0C3E65CFB}
 	EndGlobalSection
 EndGlobal
