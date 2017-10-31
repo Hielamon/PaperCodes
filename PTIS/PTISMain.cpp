@@ -245,6 +245,19 @@ void buildProblemTest(const PairInfo &pair, const cv::Mat &H, cv::Size cellNum, 
 		}
 	}
 
+	//calculate the pre-warped vertices
+	std::vector<cv::Point2f> vPreWarpedPt(verticeNum);
+	for (size_t i = 0; i < verticeNum; i++)
+	{
+		int r = i / (cellNum.width + 1), c = i - r * (cellNum.width + 1);
+		cv::Point2f vertPt(c * cellSize.width, r * cellSize.height);
+		if (!PointHTransform(vertPt, H, vPreWarpedPt[i]))
+		{
+			std::cout << "Failed to Transform point by Homograph Matrix" << std::endl;
+			exit(-1);
+		}
+	}
+
 	//add global alignment term
 	double alpha = 0.01;
 	for (int i = 0; i < verticeNum; i++)
@@ -252,14 +265,89 @@ void buildProblemTest(const PairInfo &pair, const cv::Mat &H, cv::Size cellNum, 
 		//if (1)
 		if (!nSumFCount[i])
 		{
-			int r = i / (cellNum.width + 1), c = i - r * (cellNum.width + 1);
-			cv::Point2f vertPt(c * cellSize.width, r * cellSize.height), prePt;
-			PointHTransform(vertPt, H, prePt);
 			int rIdx = i * 2;
 			denseMatrix[rIdx][rIdx] += alpha;
 			denseMatrix[rIdx + 1][rIdx + 1] += alpha;
-			b[rIdx] += alpha * prePt.x;
-			b[rIdx + 1] += alpha * prePt.y;
+			b[rIdx] += alpha * vPreWarpedPt[i].x;
+			b[rIdx + 1] += alpha * vPreWarpedPt[i].y;
+		}
+	}
+
+	//calculate the variance of triangles
+	//and add smoothness term
+	cv::Mat squareMask(cellSize, CV_8UC1, cv::Scalar(0));
+	cv::line(squareMask, cv::Point(0, 0), cv::Point(squareMask.cols - 1, squareMask.rows - 1), cv::Scalar(1));
+	cv::line(squareMask, cv::Point(squareMask.cols - 1, 0), cv::Point(0, squareMask.rows - 1), cv::Scalar(2));
+	cv::Size extSize(cellSize.width * cellNum.width, cellSize.height * cellNum.height);
+	cv::Mat extMask(extSize, CV_8UC1, cv::Scalar(0));
+	cv::Mat extImg(extSize, CV_8UC3, cv::Scalar(0));
+	int index1 = pair.index1;
+	cv::Rect originRoi(0, 0, images[index1].cols, images[index1].rows);
+	cv::rectangle(extMask, originRoi, cv::Scalar(255));
+	images[index1].copyTo(extImg(originRoi));
+
+	double beta = 0.001;
+
+	for (size_t i = 0; i < cellNum.height; i++)
+	{
+		for (size_t j = 0; j < cellNum.width; j++)
+		{
+			cv::Rect cellRoi(j * cellSize.width, i * cellSize.height, cellSize.width, cellSize.height);
+			std::vector<cv::Vec3d> vSumColor(4, cv::Vec3d(0,0,0)) , vAvgColor(4);
+			std::vector<int> vCount(4, 0);
+			cv::Mat cellMat = extImg(cellRoi), cellMask = extMask(cellRoi);
+
+			//calculate the sum of different triangle regions
+			for (size_t m = 0; m < cellSize.height; m++)
+			{
+				cv::Vec3b *pRowImg = reinterpret_cast<cv::Vec3b *>(cellMat.ptr(m));
+				uchar *pRowMask = reinterpret_cast<uchar *>(cellMask.ptr(m));
+				uchar *pRowSquareMask = reinterpret_cast<uchar *>(squareMask.ptr(m));
+				bool across1 = false, across2 = false;
+				for (size_t n = 0; n < cellSize.width; n++)
+				{
+					if (pRowSquareMask[n] == 1)across1 = true;
+					if (pRowSquareMask[n] == 2)across2 = true;
+					if (pRowMask[n])
+					{
+						int triangleIdx01 = across1 ? 1 : 0;
+						int triangleIdx23 = across2 ? 3 : 2;
+						vSumColor[triangleIdx01] += pRowImg[n];
+						vSumColor[triangleIdx23] += pRowImg[n];
+						vCount[triangleIdx01] += 1;
+						vCount[triangleIdx01] += 1;
+					}
+				}
+			}
+
+			//calculate the average color vectors
+			for (size_t m = 0; m < 4; m++)
+				vAvgColor[i] = vSumColor[i] / vCount[i];
+
+			//calculate the covariance matrix and its L2 norm
+			std::vector<cv::Mat> vCovMat(4, cv::Mat(3, 3, CV_64FC1, cv::Scalar(0)));
+			for (size_t m = 0; m < cellSize.height; m++)
+			{
+				cv::Vec3b *pRowImg = reinterpret_cast<cv::Vec3b *>(cellMat.ptr(m));
+				uchar *pRowMask = reinterpret_cast<uchar *>(cellMask.ptr(m));
+				uchar *pRowSquareMask = reinterpret_cast<uchar *>(squareMask.ptr(m));
+				bool across1 = false, across2 = false;
+				for (size_t n = 0; n < cellSize.width; n++)
+				{
+					if (pRowSquareMask[n] == 1)across1 = true;
+					if (pRowSquareMask[n] == 2)across2 = true;
+					if (pRowMask[n])
+					{
+						int triangleIdx01 = across1 ? 1 : 0;
+						int triangleIdx23 = across2 ? 3 : 2;
+						cv::Vec3d residual01_ = cv::Vec3d(pRowImg[n]) - vAvgColor[triangleIdx01];
+						cv::Vec3d residual23_ = cv::Vec3d(pRowImg[n]) - vAvgColor[triangleIdx23];
+						cv::Mat residual01(residual01_), residual23(residual23_);
+						vCovMat[triangleIdx01] += (residual01 * residual01.t());
+						vCovMat[triangleIdx23] += (residual23 * residual23.t());
+					}
+				}
+			}
 		}
 	}
 
@@ -314,22 +402,24 @@ void buildProblemTest(const PairInfo &pair, const cv::Mat &H, cv::Size cellNum, 
 int main(int argc, char *argv[])
 {
 	std::vector<cv::Mat> images;
-	LoadSameSizeImages(images, "test3");
+	LoadSameSizeImages(images, "test1");
 	images.resize(2);
 	int height = images[0].rows, width = images[0].cols;
+
+
 
 	SequenceMatcher smatcher(SequenceMatcher::F_SIFT);
 	std::list<PairInfo> pairinfos;
 	smatcher.process(images, pairinfos);
 
 	PairInfo &firstPair = *(pairinfos.begin());
-	double threshold = std::min(width, height) * 0.08;
+	double threshold = std::min(width, height) * 0.01;
 	cv::Mat globalH = cv::findHomography(firstPair.points1, firstPair.points2, firstPair.mask, cv::RANSAC, threshold);
 	firstPair.inliers_num = 0;
 	for (auto &mask : firstPair.mask)
 		if (mask != 0) firstPair.inliers_num++;
 
-	cv::Size cellNum(40, 40), cellSize(std::ceil(width / double(cellNum.width)), std::ceil(height / double(cellNum.height)));
+	cv::Size cellNum(10, 10), cellSize(std::ceil(width / double(cellNum.width)), std::ceil(height / double(cellNum.height)));
 	int verticeNum = (cellNum.width + 1) * (cellNum.height + 1), paramNum = verticeNum * 2;
 	Eigen::VectorXd b(paramNum), result;
 	std::vector<Eigen::Triplet<double>> vTriplet;
