@@ -9,13 +9,29 @@
 #include <iostream>
 #include <list>
 
-struct PairInfo
+class PairInfo
 {
+public:
+	PairInfo() {}
+	~PairInfo() {}
+
 	std::vector<cv::Point2f> points1, points2;
 	std::vector<uchar> mask;
 	int index1, index2;
 	int pairs_num;
 	int inliers_num;
+
+	cv::Mat findHomography(int method = cv::RANSAC, double threshold = 1.0)
+	{
+		cv::Mat result = cv::findHomography(points1, points2, mask, method, threshold);
+		inliers_num = 0;
+		for (auto &mask : mask)
+		{
+			if (mask != 0) { inliers_num++; }
+		}
+
+		return result;
+	}
 };
 
 class SequenceMatcher
@@ -67,6 +83,5 @@ protected:
 	float _getInlierRate(const std::vector<char>& inliers);
 
 };
-
 
 void DrawPairInfos(std::vector<cv::Mat> &images, std::list<PairInfo> &pairinfos, bool onlyPoints = false, double scale = 1.0);

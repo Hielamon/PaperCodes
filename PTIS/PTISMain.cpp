@@ -406,7 +406,11 @@ void buildProblemTest(const PairInfo &pair, const cv::Mat &H, cv::Size cellNum, 
 int main(int argc, char *argv[])
 {
 	std::vector<cv::Mat> images;
-	LoadSameSizeImages(images, "test3");
+	std::string dir = "test3";
+	if (argc == 2)
+		dir = std::string(argv[1]);
+	LoadSameSizeImages(images, dir);
+
 	images.resize(2);
 	int height = images[0].rows, width = images[0].cols;
 

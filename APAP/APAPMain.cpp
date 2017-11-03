@@ -353,30 +353,30 @@ void RawMovingDLTStitching(const cv::Mat &src1, const cv::Mat &src2, PairInfo &p
 int main(int argc, char *argv[])
 {
 	std::vector<cv::Mat> images;
-	LoadSameSizeImages(images, "test");
+	std::string dir = "test2";
+	if (argc == 2)
+		dir = std::string(argv[1]);
+	if (!LoadSameSizeImages(images, dir)) return -1;
+
+	images.resize(2);
+	int height = images[0].rows, width = images[0].cols;
 
 	SequenceMatcher smatcher(SequenceMatcher::F_SIFT);
 	std::list<PairInfo> pairinfos;
 	smatcher.process(images, pairinfos);
 
-	//cv::Mat featureImg;
-	//cv::drawKeypoints(images[0], smatcher.m_keypoints_arr[0], featureImg, cv::Scalar::all(-1));
-	//cv::imwrite("featureImg.jpg", featureImg);
+	//Just get the first pairinfo
+	PairInfo &firstPair = *(pairinfos.begin());
 
-	PairInfo &testPair = *(pairinfos.begin());
-	//DrawPairInfos(images, pairinfos, true);
-
-	cv::Mat globalH = cv::findHomography(testPair.points1, testPair.points2, testPair.mask, cv::RANSAC, 50.0);
-	std::vector<int> restIndex1, restIndex2;
-	std::vector<cv::Point2f> restPoints1, restPoints2;
-	testPair.inliers_num = 0;
-	for (auto &mask : testPair.mask)
-	{
-		if (mask != 0) { testPair.inliers_num++; }
-	}
+	double threshold = std::min(width, height) * 0.05;
+	std::cout << "Homography Ransac threshold = " << threshold << std::endl;
+	cv::Mat globalH = firstPair.findHomography(cv::RANSAC, threshold);
+	
+	cv::Point cellGrid(50, 50);
+	cv::Size cellSize(std::ceil(width / double(cellGrid.x)), std::ceil(height / double(cellGrid.y)));
 
 	//Test the globalH
-	/*double megapix = 0.6;
+	double megapix = 0.6;
 	double mini_scale = std::min(1.0, sqrt(megapix * 1e6 / images[0].size().area()));
 	cv::Size mini_size(images[0].size().width*mini_scale, images[0].size().height*mini_scale);
 	cv::Mat resizedImg0, resizedImg1, showImg;
@@ -384,21 +384,21 @@ int main(int argc, char *argv[])
 	cv::resize(images[1], resizedImg1, mini_size);
 	cv::hconcat(resizedImg0, resizedImg1, showImg);
 	cv::Mat tempShow = showImg.clone();
-	for (size_t i = 0; i < testPair.pairs_num; i++)
+	for (size_t i = 0; i < firstPair.pairs_num; i++)
 	{
-		if (testPair.mask[i] != 1)continue;
+		if (firstPair.mask[i] != 1)continue;
 		uchar r = rand() % 255;
 		uchar g = rand() % 255;
 		uchar b = rand() % 255;
 		cv::Scalar color(b, g, r);
 
-		cv::circle(showImg, testPair.points1[i] * mini_scale, 6, color, -1);
-		cv::Point2f pt2 = testPair.points2[i] * mini_scale;
+		cv::circle(showImg, firstPair.points1[i] * mini_scale, 6, color, -1);
+		cv::Point2f pt2 = firstPair.points2[i] * mini_scale;
 		pt2.x += resizedImg0.cols;
-		cv::line(showImg, testPair.points1[i] * mini_scale, pt2, color, 2);
+		cv::line(showImg, firstPair.points1[i] * mini_scale, pt2, color, 2);
 		cv::circle(showImg, pt2, 3, color, -1);
 		cv::Point2f tempPt;
-		PointHTransform(testPair.points1[i], globalH, tempPt);
+		PointHTransform(firstPair.points1[i], globalH, tempPt);
 		tempPt *= mini_scale;
 		tempPt.x += resizedImg0.cols;
 		cv::line(showImg, pt2, tempPt, cv::Scalar(0, 0, 255), 1);
@@ -408,9 +408,9 @@ int main(int argc, char *argv[])
 		cv::imshow("showImg", showImg);
 		showImg = tempShow.clone();
 		cv::waitKey(0);
-	}*/
+	}
 
-	/*cv::Size drawCellSize(50, 50);
+	cv::Size drawCellSize(50, 50);
 	int imgW = images[0].cols, imgH = images[0].rows;
 	int drawCellCol = imgW / drawCellSize.width;
 	int drawCellRow = imgH / drawCellSize.height;
@@ -425,14 +425,14 @@ int main(int argc, char *argv[])
 		cv::Point ptLeft(0, i*drawCellSize.height);
 		cv::Point ptRight(imgW - 1, i*drawCellSize.height);
 		cv::line(images[0], ptLeft, ptRight, cv::Scalar(255, 0, 255), 2);
-	}*/
+	}
 
 	cv::Mat dstGlobal;
 	GlobalHStitching(images[0], images[1], globalH, dstGlobal);
 	cv::imwrite("GlobalHStitching.jpg", dstGlobal);
 
 	cv::Mat dstAPAP;
-	RawMovingDLTStitching(images[0], images[1], testPair, dstAPAP);
+	RawMovingDLTStitching(images[0], images[1], firstPair, dstAPAP);
 	cv::imwrite("APAPStitching.jpg", dstAPAP);
 
 	DrawPairInfos(images, pairinfos, true);
