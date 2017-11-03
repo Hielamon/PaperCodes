@@ -17,6 +17,8 @@ int main(int argc, char *argv[])
 	cv::Vec3d vec_( 1, 1, 2 );
 	
 	cv::Mat vec(vec_);
+	
+
 	normTest = vec * vec.t();
 	return 0;
 }
