@@ -1,7 +1,5 @@
 #pragma once
-#include <opencv2/core/core.hpp>
-#include <opencv2/imgproc/imgproc.hpp>
-#include <opencv2/highgui/highgui.hpp>
+#include <OpencvCommon.h>
 
 #include <opencv2/features2d/features2d.hpp>
 #include <opencv2/calib3d/calib3d.hpp>
@@ -46,7 +44,7 @@ public:
 	SequenceMatcher(const FeatureType &featuretype = F_ORB, float scale = 1.0);
 
 	~SequenceMatcher();
-	
+
 	//使用特征匹配的方法找到一个合适的图片匹配排列，并返回这个匹配排列的信息
 	void process(const std::vector<cv::Mat>&images, std::list<PairInfo> &pairinfos);
 
@@ -69,7 +67,7 @@ protected:
 
 	std::vector<std::vector<PairInfo> > m_all_pairinfos;
 
-	
+
 
 	float m_scale;
 
@@ -85,3 +83,5 @@ protected:
 };
 
 void DrawPairInfos(std::vector<cv::Mat> &images, std::list<PairInfo> &pairinfos, bool onlyPoints = false, double scale = 1.0);
+
+void DrawPairInfoHomo(const std::vector<cv::Mat> &images, const PairInfo &pairinfos, const cv::Mat &H);

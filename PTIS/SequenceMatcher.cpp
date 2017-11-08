@@ -1,4 +1,5 @@
 #include "SequenceMatcher.h"
+#include <Monitor.h>
 
 SequenceMatcher::SequenceMatcher(const FeatureType &featuretype, float scale)
 {
@@ -375,4 +376,43 @@ void DrawPairInfos(std::vector<cv::Mat> &images, std::list<PairInfo> &pairinfos,
 	}
 }
 
+void DrawPairInfoHomo(const std::vector<cv::Mat> &images, const PairInfo &pairinfos, const cv::Mat &H)
+{
+	int index0 = pairinfos.index1, index1 = pairinfos.index2;
+	cv::Size imgSize0(images[index0].size()), imgSize1(images[index1].size());
+	cv::Size resultSize(imgSize0.width + imgSize1.width, std::max(imgSize0.height, imgSize1.height));
 
+	double miniScale = FitSizeToScreen(resultSize.width, resultSize.height);
+	cv::Size miniSize0(imgSize0.width*miniScale, imgSize0.height*miniScale);
+	cv::Size miniSize1(imgSize1.width*miniScale, imgSize1.height*miniScale);
+	cv::Mat resizedImg0, resizedImg1, showImg;
+	cv::resize(images[pairinfos.index1], resizedImg0, miniSize0);
+	cv::resize(images[pairinfos.index2], resizedImg1, miniSize1);
+	cv::hconcat(resizedImg0, resizedImg1, showImg);
+	cv::Mat tempShow = showImg.clone();
+	for (size_t i = 0; i < pairinfos.pairs_num; i++)
+	{
+		if (pairinfos.mask[i] != 1)continue;
+		uchar r = rand() % 255;
+		uchar g = rand() % 255;
+		uchar b = rand() % 255;
+		cv::Scalar color(b, g, r);
+
+		cv::circle(showImg, pairinfos.points1[i] * miniScale, 6, color, -1);
+		cv::Point2f pt2 = pairinfos.points2[i] * miniScale;
+		pt2.x += resizedImg0.cols;
+		cv::line(showImg, pairinfos.points1[i] * miniScale, pt2, color, 2);
+		cv::circle(showImg, pt2, 3, color, -1);
+		cv::Point2f tempPt;
+		PointHTransform(pairinfos.points1[i], H, tempPt);
+		tempPt *= miniScale;
+		tempPt.x += resizedImg0.cols;
+		cv::line(showImg, pt2, tempPt, cv::Scalar(0, 0, 255), 1);
+		cv::Rect rect(tempPt - cv::Point2f(3, 3), tempPt + cv::Point2f(3, 3));
+		cv::rectangle(showImg, rect, cv::Scalar(0, 0, 255), 1);
+
+		cv::imshow("showImg", showImg);
+		showImg = tempShow.clone();
+		cv::waitKey(0);
+	}
+}

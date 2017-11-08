@@ -1,1 +1,1 @@
-..\x64\Release\APAP.exe test2
+..\x64\Release\APAP.exe test1

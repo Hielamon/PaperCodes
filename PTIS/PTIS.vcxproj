@@ -150,6 +150,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="..\common\stitchingCommonFuc.h" />
     <ClInclude Include="SequenceMatcher.h" />
   </ItemGroup>
   <ItemGroup>

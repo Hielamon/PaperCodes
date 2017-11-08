@@ -1,5 +1,8 @@
 #include <OpencvCommon.h>
 #include "SequenceMatcher.h"
+#define MAIN_FILE
+#include <commonMacro.h>
+
 
 void BlockStitching(const cv::Mat &src, cv::Mat &dst, cv::Rect srcRoi, cv::Rect dstRoi, 
 					cv::Mat &dstMask, const cv::Mat &H)
@@ -16,7 +19,10 @@ void BlockStitching(const cv::Mat &src, cv::Mat &dst, cv::Rect srcRoi, cv::Rect 
 	for (auto &corner : corners)
 	{
 		cv::Point2f tcorner;
-		PointHTransform(corner, H, tcorner);
+		if (!PointHTransform(corner, H, tcorner))
+		{
+			HL_CERR("The Homography Point Translate is illegal");
+		}
 		if (tcorner.x < tl.x) { tl.x = tcorner.x; }
 		if (tcorner.y < tl.y) { tl.y = tcorner.y; }
 		if (tcorner.x > br.x) { br.x = tcorner.x; }
@@ -120,7 +126,9 @@ void GlobalHStitching(const cv::Mat &src1, const cv::Mat &src2, const cv::Mat &H
 	BlockStitching(src1, dst, cv::Rect(0, 0, src1.cols, src1.rows), dstRoi, dstMask, H);
 }
 
-void RawMovingDLTStitching(const cv::Mat &src1, const cv::Mat &src2, PairInfo &pairinfo, cv::Mat &dst)
+//using the nearest cluster model
+void NNMovingDLTStitching(const cv::Mat &src1, const cv::Mat &src2, PairInfo &pairinfo, cv::Mat &dst,
+						   cv::Point cellGrid, cv::Size cellSize)
 {
 	//get the origin A matrix
 	std::vector<cv::Point2f> srcPts1(pairinfo.inliers_num), srcPts2(pairinfo.inliers_num);
@@ -170,11 +178,10 @@ void RawMovingDLTStitching(const cv::Mat &src1, const cv::Mat &src2, PairInfo &p
 	globalH = T2inv*globalH*T1;
 	//GlobalHStitching(src1, src2, globalH, dst);
 
-	
-	cv::Size cellSize(50, 50);
+	//cv::Size cellSize(50, 50);
 	int width = src1.cols, height = src1.rows;
-	int cellCol = width / cellSize.width;
-	int cellRow = height / cellSize.height;
+	int cellCol = cellGrid.x;
+	int cellRow = cellGrid.y;
 
 	double gamma = 0.0025;
 	//100 pixel region
@@ -280,10 +287,10 @@ void RawMovingDLTStitching(const cv::Mat &src1, const cv::Mat &src2, PairInfo &p
 	cv::Mat src2Mask(src2.size(), CV_8U, cv::Scalar(255));
 	src2Mask.copyTo(dstMask(roi2));
 
-	int edgeExtend = 0.5 * std::min(cellSize.height, cellSize.width);
+	//int edgeExtend = 0.5 * std::min(cellSize.height, cellSize.width);
+	int edgeExtend = 0;
 	for (size_t i = 0, yIdx = 0, Hidx = 0; i < cellRow; i++, yIdx += cellSize.height)
 	{
-
 		for (size_t j = 0, xIdx = 0; j < cellCol; j++, xIdx += cellSize.width, Hidx++)
 		{
 			//not transform the cut edge
@@ -350,10 +357,231 @@ void RawMovingDLTStitching(const cv::Mat &src1, const cv::Mat &src2, PairInfo &p
 	//}
 }
 
+void RawMovingDLTStitching(const cv::Mat &src1, const cv::Mat &src2, PairInfo &pairinfo, cv::Mat &dst,
+						   cv::Point cellGrid, cv::Size cellSize)
+{
+	//get the origin A matrix
+
+	std::vector<cv::Point2f> srcPts1(pairinfo.inliers_num), srcPts2(pairinfo.inliers_num);
+	for (size_t i = 0, j = 0; i < pairinfo.pairs_num; i++)
+	{
+		if (pairinfo.mask[i] == 0) { continue; }
+		srcPts1[j] = pairinfo.points1[i];
+		srcPts2[j] = pairinfo.points2[i];
+		j++;
+	}
+
+	std::vector<cv::Point2f> pts1, pts2;
+	cv::Mat T1inv, T2inv;
+	GetRegularizedPoints(srcPts1, pts1, T1inv);
+	GetRegularizedPoints(srcPts2, pts2, T2inv);
+	/*pts1 = srcPts1;
+	pts2 = srcPts2;*/
+
+	//T1 and T2inv used for compute origin H = T2inv*H'*T1
+	cv::Mat T1 = T1inv.inv();
+
+
+	cv::Mat A(pairinfo.inliers_num * 2, 9, CV_64F, cv::Scalar(0));
+	double *Aptr = reinterpret_cast<double *>(A.data);
+	for (size_t i = 0; i < pairinfo.inliers_num; i++, Aptr += 18)
+	{
+		//H'*pt1 = pt2
+		cv::Point2f pt1 = pts1[i];
+		cv::Point2f pt2 = pts2[i];
+
+		Aptr[3] = -pt1.x;
+		Aptr[4] = -pt1.y;
+		Aptr[5] = -1;
+		Aptr[6] = pt2.y * pt1.x;
+		Aptr[7] = pt2.y * pt1.y;
+		Aptr[8] = pt2.y;
+
+		Aptr[9] = pt1.x;
+		Aptr[10] = pt1.y;
+		Aptr[11] = 1;
+		Aptr[15] = -pt2.x * pt1.x;
+		Aptr[16] = -pt2.x * pt1.y;
+		Aptr[17] = -pt2.x;
+	}
+
+	cv::Mat W, U, VT;
+	cv::SVD::compute(A, W, U, VT);
+	cv::Mat h = VT.row(8);
+	cv::Mat globalH = h.reshape(1, 3);
+	globalH = T2inv*globalH*T1;
+	cv::Mat globalDst2;
+	GlobalHStitching(src1, src2, globalH, globalDst2);
+	cv::imwrite("GlobalHStitching2.jpg", globalDst2);
+
+	//cv::Size cellSize(50, 50);
+	int width = src1.cols, height = src1.rows;
+	int cellCol = cellGrid.x;
+	int cellRow = cellGrid.y;
+
+	double gamma = 0.01, sigma2 = 10000;
+	//100 pixel region
+	//double radius = -2 * sigma2 * log(gamma);
+	double radius = 0.15 * std::min(src1.rows, src1.cols);
+	radius *= radius;
+	sigma2 = -radius / (2 * log(gamma));
+	std::cout << "impact radius = " << sqrt(radius) << std::endl;
+	std::cout << "cut gamma = " << gamma << std::endl;
+	std::cout << "sigma2 = " << sigma2 << std::endl;
+
+	std::vector<cv::Mat> HArray(cellCol*cellRow);
+
+
+	std::cout << "-------------Start to Moving DLT--------------" << std::endl;
+	cv::Mat showTest = src1.clone();
+	DrawGrid(showTest, cellGrid, cellSize, 1, 1, false);
+
+	for (size_t i = 0; i < pairinfo.inliers_num; i++)
+	{
+		cv::Scalar color = RandomColor();
+		cv::circle(showTest, srcPts1[i], 5, color, -1);
+	}
+
+
+	for (size_t i = 0, yIdx = cellSize.height / 2, Hidx = 0; i < cellRow; i++, yIdx += cellSize.height)
+	{
+
+		for (size_t j = 0, xIdx = cellSize.width / 2; j < cellCol; j++, xIdx += cellSize.width, Hidx++)
+		{
+
+			std::vector<cv::Point2d> vCorners(4);
+
+			vCorners[0] = cv::Point(xIdx - cellSize.width / 2, yIdx - cellSize.height / 2);
+			vCorners[1] = cv::Point(xIdx + cellSize.width / 2, yIdx - cellSize.height / 2);
+			vCorners[2] = cv::Point(xIdx - cellSize.width / 2, yIdx + cellSize.height / 2);
+			vCorners[3] = cv::Point(xIdx + cellSize.width / 2, yIdx + cellSize.height / 2);
+
+			cv::Mat showTmp = showTest.clone();
+			cv::circle(showTmp, cv::Point(xIdx, yIdx), sqrt(radius), cv::Scalar(0, 0, 255), 2);
+			cv::circle(showTmp, cv::Point(xIdx, yIdx), 10, cv::Scalar(255, 0, 0), -1);
+			
+			int changeCount = 0;
+			cv::Mat Atemp = A.clone();
+
+			for (size_t k = 0; k < pairinfo.inliers_num; k++)
+			{
+				float dx = srcPts1[k].x - xIdx;
+				float dy = srcPts1[k].y - yIdx;
+				double distant = dx*dx + dy*dy;
+				if (distant <= radius)
+				{
+					double wi = exp(-distant / (2 * sigma2));
+					wi /= gamma;
+					cv::Mat &rowTwo = Atemp.rowRange(k * 2, k * 2 + 2);
+					rowTwo *= wi;
+					changeCount++;
+
+					//cv::line(showTmp, cv::Point(xIdx, yIdx), srcPts1[k], cv::Scalar(0, 0, 255), 2);
+					cv::circle(showTmp, srcPts1[k], 10, cv::Scalar(0, 255, 0), -1);
+					
+				}
+			}
+			if (changeCount > 0)
+			{
+				cv::Mat W_, U_, VT_;
+				cv::SVD::compute(Atemp, W_, U_, VT_);
+				cv::Mat h_ = VT_.row(8);
+				cv::Mat H_ = h_.reshape(1, 3);
+				HArray[Hidx] = T2inv*H_*T1;
+				//HArray[Hidx] = H_;
+
+				double HDist = 0;
+				for (size_t m = 0; m < 4; m++)
+				{
+					cv::Point2d localPt, globalPt, distPt;
+					PointHTransform(vCorners[m], globalH, globalPt);
+					PointHTransform(vCorners[m], HArray[Hidx], localPt);
+					distPt = localPt - globalPt;
+					HDist = std::max(sqrt(distPt.dot(distPt)), HDist);
+				}
+
+				//HDist /= 4;
+				if (HDist > 0.4 * std::min(src1.rows, src1.cols))
+				{
+					HArray[Hidx] = globalH;
+				}
+
+				//cv::imshow("showTmp", showTmp);
+				//cv::waitKey(1);
+			}
+			else
+			{
+				HArray[Hidx] = globalH;
+			}
+
+			
+		}
+	}
+
+	std::cout << "--------------End Moving DLT---------------" << std::endl;
+
+	//decide the size of final image
+	std::vector<cv::Point2f> corners(4);
+	corners[0] = cv::Point2f(0, 0);
+	corners[1] = cv::Point2f(src1.cols, 0);
+	corners[2] = cv::Point2f(0, src1.rows);
+	corners[3] = cv::Point2f(src1.cols, src1.rows);
+
+	cv::Point2f tl(H_FLOAT_MAX, H_FLOAT_MAX);
+	cv::Point2f br(H_FLOAT_MIN, H_FLOAT_MIN);
+	for (auto &corner : corners)
+	{
+		cv::Point2f tcorner;
+		int colIdx = corner.x / cellSize.width;
+		int rowIdx = corner.y / cellSize.height;
+		if (colIdx == cellCol)colIdx--;
+		if (rowIdx == cellRow) rowIdx--;
+		PointHTransform(corner, HArray[colIdx + rowIdx*cellCol], tcorner);
+		if (tcorner.x < tl.x) { tl.x = tcorner.x; }
+		if (tcorner.y < tl.y) { tl.y = tcorner.y; }
+		if (tcorner.x > br.x) { br.x = tcorner.x; }
+		if (tcorner.y > br.y) { br.y = tcorner.y; }
+	}
+
+	cv::Rect roi2(0, 0, src2.cols, src2.rows), roi1(tl, br);
+	cv::Rect dstRoi = GetUnionRoi(roi1, roi2);
+
+	roi2.x -= dstRoi.x;
+	roi2.y -= dstRoi.y;
+
+	dst = cv::Mat(dstRoi.size(), CV_8UC3);
+	src2.copyTo(dst(roi2));
+
+	cv::Mat dstMask(dstRoi.size(), CV_8U, cv::Scalar(0));
+	cv::Mat src2Mask(src2.size(), CV_8U, cv::Scalar(255));
+	src2Mask.copyTo(dstMask(roi2));
+
+	int edgeExtend = 0.5 * std::min(cellSize.height, cellSize.width);
+	//int edgeExtend = 0;
+	for (size_t i = 0, yIdx = 0, Hidx = 0; i < cellRow; i++, yIdx += cellSize.height)
+	{
+		for (size_t j = 0, xIdx = 0; j < cellCol; j++, xIdx += cellSize.width, Hidx++)
+		{
+			//not transform the cut edge
+			int cellx = xIdx, celly = yIdx, cellw = cellSize.width, cellh = cellSize.height;
+			//if (j != 0)cellx -= edgeExtend;
+			if (j != cellCol - 1)cellw += (1 * edgeExtend);
+			//if (i != 0)celly -= edgeExtend;
+			if (i != cellRow - 1) cellh += (1 * edgeExtend);
+			cv::Rect cellRoi(cellx, celly, cellw, cellh);
+			cv::Mat cellImg = src1(cellRoi);
+			BlockStitching(cellImg, dst, cellRoi, dstRoi, dstMask, HArray[Hidx]);
+		}
+	}
+
+	
+}
+
+
 int main(int argc, char *argv[])
 {
 	std::vector<cv::Mat> images;
-	std::string dir = "test2";
+	std::string dir = "test1";
 	if (argc == 2)
 		dir = std::string(argv[1]);
 	if (!LoadSameSizeImages(images, dir)) return -1;
@@ -367,72 +595,25 @@ int main(int argc, char *argv[])
 
 	//Just get the first pairinfo
 	PairInfo &firstPair = *(pairinfos.begin());
-
-	double threshold = std::min(width, height) * 0.05;
+	double threshold = std::min(width, height) * 0.04;
 	std::cout << "Homography Ransac threshold = " << threshold << std::endl;
 	cv::Mat globalH = firstPair.findHomography(cv::RANSAC, threshold);
 	
-	cv::Point cellGrid(50, 50);
+	cv::Point cellGrid(100, 100);
 	cv::Size cellSize(std::ceil(width / double(cellGrid.x)), std::ceil(height / double(cellGrid.y)));
+	cv::Size extSize1(cellGrid.x * cellSize.width, cellGrid.y * cellSize.height);
+	cv::Mat ext1(extSize1, CV_8UC3, cv::Scalar(0));
+	images[0].copyTo(ext1(cv::Rect(0, 0, images[0].cols, images[0].rows)));
+	images[0] = ext1;
 
-	//Test the globalH
-	double megapix = 0.6;
-	double mini_scale = std::min(1.0, sqrt(megapix * 1e6 / images[0].size().area()));
-	cv::Size mini_size(images[0].size().width*mini_scale, images[0].size().height*mini_scale);
-	cv::Mat resizedImg0, resizedImg1, showImg;
-	cv::resize(images[0], resizedImg0, mini_size);
-	cv::resize(images[1], resizedImg1, mini_size);
-	cv::hconcat(resizedImg0, resizedImg1, showImg);
-	cv::Mat tempShow = showImg.clone();
-	for (size_t i = 0; i < firstPair.pairs_num; i++)
-	{
-		if (firstPair.mask[i] != 1)continue;
-		uchar r = rand() % 255;
-		uchar g = rand() % 255;
-		uchar b = rand() % 255;
-		cv::Scalar color(b, g, r);
+	//DrawGrid(images[0], cellGrid, cellSize, 1, 2);
 
-		cv::circle(showImg, firstPair.points1[i] * mini_scale, 6, color, -1);
-		cv::Point2f pt2 = firstPair.points2[i] * mini_scale;
-		pt2.x += resizedImg0.cols;
-		cv::line(showImg, firstPair.points1[i] * mini_scale, pt2, color, 2);
-		cv::circle(showImg, pt2, 3, color, -1);
-		cv::Point2f tempPt;
-		PointHTransform(firstPair.points1[i], globalH, tempPt);
-		tempPt *= mini_scale;
-		tempPt.x += resizedImg0.cols;
-		cv::line(showImg, pt2, tempPt, cv::Scalar(0, 0, 255), 1);
-		cv::Rect rect(tempPt - cv::Point2f(3, 3), tempPt + cv::Point2f(3, 3));
-		cv::rectangle(showImg, rect, cv::Scalar(0, 0, 255), 1);
-
-		cv::imshow("showImg", showImg);
-		showImg = tempShow.clone();
-		cv::waitKey(0);
-	}
-
-	cv::Size drawCellSize(50, 50);
-	int imgW = images[0].cols, imgH = images[0].rows;
-	int drawCellCol = imgW / drawCellSize.width;
-	int drawCellRow = imgH / drawCellSize.height;
-	for (size_t i = 0; i < drawCellCol; i++)
-	{
-		cv::Point ptTop(i*drawCellSize.width, 0);
-		cv::Point ptBottom(i*drawCellSize.width, imgH - 1);
-		cv::line(images[0], ptTop, ptBottom, cv::Scalar(255, 0, 255), 2);
-	}
-	for (size_t i = 0; i < drawCellRow; i++)
-	{
-		cv::Point ptLeft(0, i*drawCellSize.height);
-		cv::Point ptRight(imgW - 1, i*drawCellSize.height);
-		cv::line(images[0], ptLeft, ptRight, cv::Scalar(255, 0, 255), 2);
-	}
-
-	cv::Mat dstGlobal;
+	/*cv::Mat dstGlobal;
 	GlobalHStitching(images[0], images[1], globalH, dstGlobal);
-	cv::imwrite("GlobalHStitching.jpg", dstGlobal);
+	cv::imwrite("GlobalHStitching.jpg", dstGlobal);*/
 
 	cv::Mat dstAPAP;
-	RawMovingDLTStitching(images[0], images[1], firstPair, dstAPAP);
+	RawMovingDLTStitching(images[0], images[1], firstPair, dstAPAP, cellGrid, cellSize);
 	cv::imwrite("APAPStitching.jpg", dstAPAP);
 
 	DrawPairInfos(images, pairinfos, true);

@@ -1,139 +1,52 @@
+#define MAIN_FILE
+#include <commonMacro.h>
+
 #include <OpencvCommon.h>
 #include "SequenceMatcher.h"
 #include <Eigen/Sparse>
 #include <sstream>
+#include "../common/stitchingCommonFuc.h"
 
 int dotR = 2, lineW = 2;
 
-void BlockStitching(const cv::Mat &src, cv::Mat &dst, cv::Rect srcRoi, cv::Rect dstRoi,
-					cv::Mat &dstMask, const cv::Mat &H)
+
+void GlobalHStitching(const cv::Mat &src1, const cv::Mat &mask1, const cv::Mat &src2, const cv::Mat &mask2,
+					  const cv::Mat &H, cv::Mat &dst, cv::Mat &maskDst)
 {
-	//decide the size of final image
-	std::vector<cv::Point2f> corners(4);
-	corners[0] = srcRoi.tl();
-	corners[1] = srcRoi.br();
-	corners[2] = cv::Point2f(corners[0].x, corners[1].y);
-	corners[3] = cv::Point2f(corners[1].x, corners[0].y);
+	cv::Point gridDim(1, 1);
+	cv::Size gridSize(src1.cols, src1.rows);
+	int verticeNum = (gridDim.x + 1) * (gridDim.y + 1);
+	std::vector<cv::Point2d> vVertices(verticeNum);
 
-	cv::Point2f tl(H_FLOAT_MAX, H_FLOAT_MAX);
-	cv::Point2f br(H_FLOAT_MIN, H_FLOAT_MIN);
-	for (auto &corner : corners)
+	for (size_t i = 0; i < verticeNum; i++)
 	{
-		cv::Point2f tcorner;
-		PointHTransform(corner, H, tcorner);
-		if (tcorner.x < tl.x) { tl.x = tcorner.x; }
-		if (tcorner.y < tl.y) { tl.y = tcorner.y; }
-		if (tcorner.x > br.x) { br.x = tcorner.x; }
-		if (tcorner.y > br.y) { br.y = tcorner.y; }
+		int r = i / (gridDim.x + 1), c = i - r * (gridDim.x + 1);
+		cv::Point2d vertPt(c * gridSize.width, r * gridSize.height);
+		if (!PointHTransform(vertPt, H, vVertices[i]))
+			HL_CERR("Failed to Transform point by Homograph Matrix");
 	}
-	/*tl = cv::Point2f(0, 0);
-	br = cv::Point2f(dst.cols, dst.rows);*/
-	/*tl = cv::Point2f(-dst.cols, -dst.rows);
-	br = cv::Point2f(dst.cols * 2, dst.rows * 2);*/
 
-	cv::Rect srcRoi_(tl, br);
-	bool isOverlap = GetOverlapRoi(srcRoi_, dstRoi, srcRoi_);
-	if (!isOverlap) { return; }
-	cv::Mat Hinv = H.inv();
-	cv::Point tl_ = srcRoi_.tl();
-	cv::Point br_ = srcRoi_.br();
+	cv::Mat gridResult = src2.clone() * 0.6;
+	DrawGridVertices(gridResult, vVertices, gridDim, 2, 3);
+	cv::imwrite("gridResultGlobal.jpg", gridResult);
 
-	for (int yi = tl_.y; yi < br_.y; yi++)
-	{
-		cv::Vec3b *rowptr = reinterpret_cast<cv::Vec3b *>(dst.ptr(yi - dstRoi.y));
-		uchar *rowMaskptr = dstMask.ptr(yi - dstRoi.y);
-		for (int xi = tl_.x; xi < br_.x; xi++)
-		{
-			cv::Point2f curPt(xi, yi), srcPt;
-			PointHTransform(curPt, Hinv, srcPt);
-			cv::Point srcPt_;
-			srcPt_.x = srcPt.x - srcRoi.x;
-			srcPt_.y = srcPt.y - srcRoi.y;
-			if (srcPt_.x >= 0 && srcPt_.x < src.cols && srcPt_.y >= 0 && srcPt_.y < src.rows)
-			{
-				cv::Vec3b srcPixel = src.at<cv::Vec3b>(srcPt_.y, srcPt_.x);
-				int tempx = xi - dstRoi.x;
-				switch (rowMaskptr[tempx])
-				{
-				case 255:
-					rowptr[tempx] = 0.5*rowptr[tempx] + 0.5*srcPixel;
-					rowMaskptr[tempx] = 254;
-					break;
-				case 254:
-					break;
-				default:
-					rowptr[tempx] = srcPixel;
-					break;
-				}
-			}
-		}
-	}
+	cv::Mat warpedResult, warpedMask;
+	cv::Rect warpedROI;
+	GridWarping(src1, mask1, gridDim, gridSize, vVertices, warpedResult, warpedMask, warpedROI);
+	std::vector<cv::Mat> vPreparedImg, vPreparedMask;
+	std::vector<cv::Rect> vROI;
+
+	vPreparedImg.push_back(src2);
+	vPreparedMask.push_back(mask2);
+	vROI.push_back(cv::Rect(0, 0, src2.cols, src2.rows));
+
+	vPreparedImg.push_back(warpedResult);
+	vPreparedMask.push_back(warpedMask);
+	vROI.push_back(warpedROI);
+
+	AverageMerge(vPreparedImg, vPreparedMask, vROI, dst, maskDst);
 }
 
-void GlobalHStitching(const cv::Mat &src1, const cv::Mat &src2, const cv::Mat &H, cv::Mat &dst)
-{
-	//decide the size of final image
-	std::vector<cv::Point2f> corners(4);
-	corners[0] = cv::Point2f(0, 0);
-	corners[1] = cv::Point2f(src1.cols, 0);
-	corners[2] = cv::Point2f(0, src1.rows);
-	corners[3] = cv::Point2f(src1.cols, src1.rows);
-
-	cv::Point2f tl(H_FLOAT_MAX, H_FLOAT_MAX);
-	cv::Point2f br(H_FLOAT_MIN, H_FLOAT_MIN);
-	for (auto &corner : corners)
-	{
-		cv::Point2f tcorner;
-		PointHTransform(corner, H, tcorner);
-		if (tcorner.x < tl.x) { tl.x = tcorner.x; }
-		if (tcorner.y < tl.y) { tl.y = tcorner.y; }
-		if (tcorner.x > br.x) { br.x = tcorner.x; }
-		if (tcorner.y > br.y) { br.y = tcorner.y; }
-	}
-	/*for (size_t i = 0; i < src1.rows; i++)
-	{
-	for (size_t j = 0; j < src1.cols; j++)
-	{
-	if (i > 0 && i < src1.rows - 1 && j > 0 && j < src1.cols - 1)continue;
-	cv::Point2f boundaryPt(j, i);
-	cv::Point2f tcorner;
-	PointHTransform(boundaryPt, H, tcorner);
-	if (tcorner.x < tl.x) { tl.x = tcorner.x; }
-	if (tcorner.y < tl.y) { tl.y = tcorner.y; }
-	if (tcorner.x > br.x) { br.x = tcorner.x; }
-	if (tcorner.y > br.y) { br.y = tcorner.y; }
-	}
-	}*/
-	/*tl = cv::Point2f(-src2.cols, -src2.rows);
-	br = cv::Point2f(src2.cols*2, src2.rows*2);*/
-
-
-	cv::Rect roi2(0, 0, src2.cols, src2.rows), roi1(tl, br);
-	cv::Rect dstRoi = GetUnionRoi(roi1, roi2);
-
-	roi2.x -= dstRoi.x;
-	roi2.y -= dstRoi.y;
-
-	dst = cv::Mat(dstRoi.size(), CV_8UC3);
-	src2.copyTo(dst(roi2));
-
-	cv::Mat dstMask(dstRoi.size(), CV_8U, cv::Scalar(0));
-	cv::Mat src2Mask(src2.size(), CV_8U, cv::Scalar(255));
-	src2Mask.copyTo(dstMask(roi2));
-
-	BlockStitching(src1, dst, cv::Rect(0, 0, src1.cols, src1.rows), dstRoi, dstMask, H);
-}
-
-const int vTriangles[8][3] = {
-	{0, 2, 3},
-	{2, 3, 0},
-	{0, 1, 2},
-	{2, 0, 1},
-	{1, 3, 0},
-	{3, 0, 1},
-	{1, 2, 3},
-	{3, 1, 2}
-};
 
 void buildProblemTest(const PairInfo &pair, const cv::Mat &H, cv::Size cellNum, cv::Size cellSize,
 				  std::vector<Eigen::Triplet<double>> &vTriplet, Eigen::VectorXd &b, std::vector<cv::Mat> &images)
@@ -146,6 +59,7 @@ void buildProblemTest(const PairInfo &pair, const cv::Mat &H, cv::Size cellNum, 
 	std::vector<std::vector<double>> denseMatrix(paramNum, std::vector<double>(paramNum, 0));
 	std::vector<double> nSumFCount(verticeNum, 0);
 	//add local alignment term
+	double gamma = 1;
 	for (size_t k = 0; k < pair.pairs_num; k++)
 	{
 		if (!pair.mask[k]) continue;
@@ -173,13 +87,13 @@ void buildProblemTest(const PairInfo &pair, const cv::Mat &H, cv::Size cellNum, 
 			for (int j = 0; j < 4; j++)
 			{
 				int cIdx = vertIdxs[j] * 2;
-				double tmpCoeff = coeffs[i] * coeffs[j];
+				double tmpCoeff = coeffs[i] * coeffs[j] * gamma;
 				denseMatrix[rIdx][cIdx] += tmpCoeff;
 				denseMatrix[rIdx + 1][cIdx + 1] += tmpCoeff;
 			}
 
-			b[rIdx] += coeffs[i] * pt2.x;
-			b[rIdx + 1] += coeffs[i] * pt2.y;
+			b[rIdx] += coeffs[i] * pt2.x * gamma;
+			b[rIdx + 1] += coeffs[i] * pt2.y * gamma;
 		}
 	}
 
@@ -200,8 +114,8 @@ void buildProblemTest(const PairInfo &pair, const cv::Mat &H, cv::Size cellNum, 
 	double alpha = 1e-4;
 	for (int i = 0; i < verticeNum; i++)
 	{
-		//if (1)
-		if (!nSumFCount[i])
+		if (1)
+		//if (!nSumFCount[i])
 		{
 			int rIdx = i * 2;
 			denseMatrix[rIdx][rIdx] += alpha;
@@ -225,7 +139,17 @@ void buildProblemTest(const PairInfo &pair, const cv::Mat &H, cv::Size cellNum, 
 	images[index1].copyTo(extImg(originRoi));
 
 	double beta = 0.001, beta2 = 0.01;
-	
+	const int vTriangles[8][3] = {
+		{ 0, 2, 3 },
+		{ 2, 3, 0 },
+		{ 0, 1, 2 },
+		{ 2, 0, 1 },
+		{ 1, 3, 0 },
+		{ 3, 0, 1 },
+		{ 1, 2, 3 },
+		{ 3, 1, 2 }
+	};
+
 	for (size_t i = 0; i < cellNum.height; i++)
 	{
 		for (size_t j = 0; j < cellNum.width; j++)
@@ -355,7 +279,11 @@ void buildProblemTest(const PairInfo &pair, const cv::Mat &H, cv::Size cellNum, 
 				vTriplet.push_back(Eigen::Triplet<double>(i, j, denseMatrix[i][j]));
 
 	assert(images.size() == 2);
-	cv::Mat img1 = images[pair.index1].clone();
+	
+	cv::Size resultSize(cellNum.width * cellSize.width, cellNum.height*cellSize.height);
+	cv::Rect originROI(0, 0, images[pair.index1].cols, images[pair.index1].rows);
+	cv::Mat img1(resultSize, CV_8UC3, cv::Scalar(0));
+	images[pair.index1].copyTo(img1(originROI));
 	
 	for (size_t i = 0; i < pair.pairs_num; i++)
 	{
@@ -374,12 +302,11 @@ void buildProblemTest(const PairInfo &pair, const cv::Mat &H, cv::Size cellNum, 
 			cv::Scalar color(0, 255, 0);
 			if (rowFCount[j])
 				color = cv::Scalar(0, 0, 255);
-			//cv::rectangle(img1, cv::Rect(), color, lineW);
 			cv::Rect cellRoi(tl, br);
-			cv::Mat colorRect(cellRoi.height, cellRoi.width, CV_8UC3, color);
-			double gamma = 0.1;
-			img1(cellRoi) = img1(cellRoi)*(1 - gamma) + img1(cellRoi).mul(colorRect) * gamma;
-			
+
+			cv::rectangle(img1, cellRoi, color, lineW);
+			//cv::Mat colorRect(cellRoi.height, cellRoi.width, CV_8UC3, color);
+
 			std::stringstream ioStr;
 			ioStr << i*(cellNum.width + 1) + j << ":" << rowFCount[j];
 
@@ -406,7 +333,7 @@ void buildProblemTest(const PairInfo &pair, const cv::Mat &H, cv::Size cellNum, 
 int main(int argc, char *argv[])
 {
 	std::vector<cv::Mat> images;
-	std::string dir = "test3";
+	std::string dir = "test2";
 	if (argc == 2)
 		dir = std::string(argv[1]);
 	LoadSameSizeImages(images, dir);
@@ -419,116 +346,103 @@ int main(int argc, char *argv[])
 	smatcher.process(images, pairinfos);
 
 	PairInfo &firstPair = *(pairinfos.begin());
-	double threshold = std::min(width, height) * 0.05;
-	cv::Mat globalH = cv::findHomography(firstPair.points1, firstPair.points2, firstPair.mask, cv::RANSAC, threshold);
-	firstPair.inliers_num = 0;
-	for (auto &mask : firstPair.mask)
-		if (mask != 0) firstPair.inliers_num++;
+	double threshold = std::min(width, height) * 0.04;
+	std::cout << "Homography Ransac threshold = " << threshold << std::endl;
+	cv::Mat globalH = firstPair.findHomography(cv::RANSAC, threshold);
 
-	cv::Size cellNum(50, 50), cellSize(std::ceil(width / double(cellNum.width)), std::ceil(height / double(cellNum.height)));
-	int verticeNum = (cellNum.width + 1) * (cellNum.height + 1), paramNum = verticeNum * 2;
-	Eigen::VectorXd b(paramNum), result;
-	std::vector<Eigen::Triplet<double>> vTriplet;
+	cv::Size cellNum(50, 50), gridSize(std::ceil(width / double(cellNum.width)), std::ceil(height / double(cellNum.height)));
+	cv::Point gridDim(cellNum.width, cellNum.height);
+	std::vector<cv::Point2d> vVertices;
 
-	buildProblemTest(firstPair, globalH, cellNum, cellSize, vTriplet, b, images);
-	//buildProblem(firstPair, globalH, cellNum, cellSize, vTriplet, b);
-	
-	Eigen::SparseMatrix<double> A(paramNum, paramNum);
-	A.setFromTriplets(vTriplet.begin(), vTriplet.end());
-	
-	Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver;
-	solver.compute(A);
-	if (solver.info() != Eigen::Success)
+	bool forTest = false;
+	if(forTest)
 	{
-		std::cout << "Failed to compute sparse Matrix" << std::endl;
-		return -1;
-	}
+		int verticeNum = (cellNum.width + 1) * (cellNum.height + 1), paramNum = verticeNum * 2;
+		Eigen::VectorXd b(paramNum), result;
+		std::vector<Eigen::Triplet<double>> vTriplet;
 
-	result = solver.solve(b);
-	if (solver.info() != Eigen::Success)
-	{
-		std::cout << "Failed to solve the result" << std::endl;
-		return -1;
-	}
+		buildProblemTest(firstPair, globalH, cellNum, gridSize, vTriplet, b, images);
 
-	cv::Mat showTest(cellNum.height * cellSize.height, cellNum.width * cellSize.width, CV_8UC3, cv::Scalar(0));
-	cv::Rect oriRoi(0, 0, width, height);
-	images[1].copyTo(showTest(oriRoi));
+		Eigen::SparseMatrix<double> A(paramNum, paramNum);
+		A.setFromTriplets(vTriplet.begin(), vTriplet.end());
 
-	cv::Point resTl(result[0], result[1]), resBr = resTl;
-	for (int i = 0; i < paramNum; i += 2)
-	{
-		if (std::isnan(result[i]) || std::isnan(result[i + 1]))
+		Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver;
+		solver.compute(A);
+		if (solver.info() != Eigen::Success)
 		{
-			std::cout << "Invalid Result" << std::endl;
-			exit(-1);
-		}
-		if (resTl.x > result[i])resTl.x = result[i];
-		if (resTl.y > result[i + 1])resTl.y = result[i + 1];
-		if (resBr.x < result[i])resBr.x = result[i];
-		if (resBr.y < result[i + 1])resBr.y = result[i + 1];
-	}
-
-	cv::Rect resultRoi(resTl, resBr);
-	oriRoi.width = showTest.cols;
-	oriRoi.height = showTest.rows;
-	resultRoi = GetUnionRoi(resultRoi, oriRoi);
-	cv::Mat resultTest(resultRoi.height, resultRoi.width, CV_8UC3, cv::Scalar(0));
-	cv::Point offset = -resultRoi.tl();
-	showTest.copyTo(resultTest(cv::Rect(oriRoi.x + offset.x, oriRoi.y + offset.y, oriRoi.width, oriRoi.height)));
-	
-	resultTest *= 0.6;
-	for (int i = 0; i < verticeNum; i++)
-	{
-		int r = i / (cellNum.width + 1), c = i - r * (cellNum.width + 1);
-		cv::Point vertPt(c * cellSize.width, r * cellSize.height);
-		//cv::circle(showTest, vertPt, 4, cv::Scalar(0, 255, 0), -1);
-		cv::Point downPt(vertPt.x, vertPt.y + cellSize.height);
-		cv::Point rightPt(vertPt.x + cellSize.width, vertPt.y);
-		cv::line(showTest, vertPt, downPt, cv::Scalar(0, 255, 255), lineW);
-		cv::line(showTest, vertPt, rightPt, cv::Scalar(0, 255, 255), lineW);
-
-		vertPt.x = result[i * 2];
-		vertPt.y = result[i * 2 + 1];
-		
-		//cv::circle(resultTest, vertPt + offset, 4, cv::Scalar(255, 0, 0), -1);
-
-		if (c < cellNum.width)
-		{
-			int j = i + 1;
-			rightPt.x = result[j * 2];
-			rightPt.y = result[j * 2 + 1];
-			cv::line(resultTest, vertPt + offset, rightPt + offset, cv::Scalar(255, 0, 255), lineW);
+			std::cout << "Failed to compute sparse Matrix" << std::endl;
+			return -1;
 		}
 
-		if(r < cellNum.height)
+		result = solver.solve(b);
+		if (solver.info() != Eigen::Success)
 		{
-			int j = i + cellNum.width + 1;
-			downPt.x = result[j * 2];
-			downPt.y = result[j * 2 + 1];
-			cv::line(resultTest, vertPt + offset, downPt + offset, cv::Scalar(0, 255, 255), lineW);
+			std::cout << "Failed to solve the result" << std::endl;
+			return -1;
+		}
+
+
+		vVertices.resize(verticeNum);
+		for (int i = 0, pIdx = 0; i < verticeNum; i++, pIdx += 2)
+		{
+			vVertices[i].x = result[pIdx];
+			vVertices[i].y = result[pIdx + 1];
+			if (isnan(result[pIdx]) || isnan(result[pIdx + 1]))
+				HL_CERR("result " << pIdx << " is not valid");
 		}
 	}
-
-	/*for (int i = 0; i < verticeNum; i++)
+	else
 	{
-		int r = i / (cellNum.width + 1), c = i - r * (cellNum.width + 1);
-		cv::Point vertPt(c * cellSize.width, r * cellSize.height);
-		cv::circle(showTest, vertPt, dotR, cv::Scalar(0, 255, 0), -1);
+		EstimateGridVertices(firstPair, globalH, gridDim, gridSize, images, vVertices, 3.0);
+	}
 
-		vertPt.x = result[i * 2];
-		vertPt.y = result[i * 2 + 1];
+	{
+		cv::Mat showTest = images[1].clone();
+		DrawGrid(showTest, gridDim, gridSize, 1, 3);
 
-		cv::circle(resultTest, vertPt + offset, dotR, cv::Scalar(255, 0, 0), -1);
-	}*/
+		cv::Mat resultTest = images[1].clone() * 0.6;
+		DrawGridVertices(resultTest, vVertices, gridDim, 2, 3);
 
-	cv::imwrite("resultTest.jpg", resultTest);
-	cv::imwrite("showTest.jpg", showTest);
+
+		cv::imwrite("resultTest.jpg", resultTest);
+		cv::imwrite("showTest.jpg", showTest);
+	}
+
+	cv::Mat globalResult, globalResultMask;
+	cv::Mat mask1(images[0].size(), CV_8UC1, cv::Scalar(255));
+	cv::Mat mask2(images[1].size(), CV_8UC1, cv::Scalar(255));
+	GlobalHStitching(images[0], mask1, images[1], mask2, globalH, globalResult, globalResultMask);
+	cv::imwrite("GlobalHStitching.jpg", globalResult);
+
+	cv::Mat extImg0(gridDim.y* gridSize.height, gridDim.x * gridSize.width, CV_8UC3, cv::Scalar(0));
+	cv::Mat extMask0(gridDim.y* gridSize.height, gridDim.x * gridSize.width, CV_8UC1, cv::Scalar(0));
+	cv::Rect img0ROI(0, 0, images[0].cols, images[0].rows);
+	cv::rectangle(extMask0, img0ROI, cv::Scalar(255), -1);
+	images[0].copyTo(extImg0(img0ROI));
+	//DrawGrid(extImg0, gridDim, cellSize, 2, 3);
 	
+	cv::Mat warpedResult, warpedMask;
+	cv::Rect warpedROI;
+	GridWarping(extImg0, extMask0, gridDim, gridSize, vVertices, warpedResult, warpedMask, warpedROI);
+	cv::imwrite("warpedResult.jpg", warpedResult);
+	cv::imwrite("warpedMask.jpg", warpedMask);
 
-	cv::Mat dstGlobal;
-	GlobalHStitching(images[0], images[1], globalH, dstGlobal);
-	cv::imwrite("GlobalHStitching.jpg", dstGlobal);
+	cv::Rect img1ROI(0, 0, images[1].cols, images[1].rows);
+	cv::Mat img1Mask(images[1].rows, images[1].cols, CV_8UC1, cv::Scalar(255));
+	std::vector<cv::Mat> vPreparedImg, vPreparedMask;
+	std::vector<cv::Rect> vROI;
+
+	vPreparedImg.push_back(images[1]);
+	vPreparedMask.push_back(img1Mask);
+	vROI.push_back(img1ROI);
+	vPreparedImg.push_back(warpedResult);
+	vPreparedMask.push_back(warpedMask);
+	vROI.push_back(warpedROI);
+
+	cv::Mat resultImg, resultImgMask;
+	AverageMerge(vPreparedImg, vPreparedMask, vROI, resultImg, resultImgMask);
+	cv::imwrite("resultImg.jpg", resultImg);
+	cv::imwrite("resultImgMask.jpg", resultImgMask);
 
 	DrawPairInfos(images, pairinfos, true);
 

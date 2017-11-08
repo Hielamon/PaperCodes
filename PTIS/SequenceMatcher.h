@@ -1,7 +1,5 @@
 #pragma once
-#include <opencv2/core/core.hpp>
-#include <opencv2/imgproc/imgproc.hpp>
-#include <opencv2/highgui/highgui.hpp>
+#include <OpencvCommon.h>
 
 #include <opencv2/features2d/features2d.hpp>
 #include <opencv2/calib3d/calib3d.hpp>
@@ -9,13 +7,29 @@
 #include <iostream>
 #include <list>
 
-struct PairInfo
+class PairInfo
 {
+public:
+	PairInfo() {}
+	~PairInfo() {}
+
 	std::vector<cv::Point2f> points1, points2;
 	std::vector<uchar> mask;
 	int index1, index2;
 	int pairs_num;
 	int inliers_num;
+
+	cv::Mat findHomography(int method = cv::RANSAC, double threshold = 1.0)
+	{
+		cv::Mat result = cv::findHomography(points1, points2, mask, method, threshold);
+		inliers_num = 0;
+		for (auto &mask : mask)
+		{
+			if (mask != 0) { inliers_num++; }
+		}
+
+		return result;
+	}
 };
 
 class SequenceMatcher
@@ -68,5 +82,6 @@ protected:
 
 };
 
-
 void DrawPairInfos(std::vector<cv::Mat> &images, std::list<PairInfo> &pairinfos, bool onlyPoints = false, double scale = 1.0);
+
+void DrawPairInfoHomo(const std::vector<cv::Mat> &images, const PairInfo &pairinfos, const cv::Mat &H);

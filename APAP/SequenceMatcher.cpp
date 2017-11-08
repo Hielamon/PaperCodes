@@ -1,4 +1,5 @@
 #include "SequenceMatcher.h"
+#include <Monitor.h>
 
 SequenceMatcher::SequenceMatcher(const FeatureType &featuretype, float scale)
 {
@@ -347,11 +348,16 @@ void DrawPairInfos(std::vector<cv::Mat> &images, std::list<PairInfo> &pairinfos,
 
 	for (std::list<PairInfo>::iterator iter = pairinfos.begin(); iter != pairinfos.end(); iter++)
 	{
-		cv::Mat result;
-		cv::Mat left, right;
-		images[iter->index1].copyTo(left);
-		images[iter->index2].copyTo(right);
-		cv::hconcat(left, right, result);
+		
+		int index0 = iter->index1, index1 = iter->index2;
+		assert(images[index0].type() == images[index1].type());
+		int resultType = images[iter->index1].type();
+		cv::Size imgSize0(images[index0].size()), imgSize1(images[index1].size());
+		cv::Size resultSize(imgSize0.width + imgSize1.width, std::max(imgSize0.height, imgSize1.height));
+
+		cv::Mat result(resultSize, resultType, cv::Scalar(0));;
+		images[index0].copyTo(result(cv::Rect(0, 0, imgSize0.width, imgSize0.height)));
+		images[index1].copyTo(result(cv::Rect(imgSize0.width, 0, imgSize1.width, imgSize1.height)));
 
 		for (size_t i = 0; i < iter->pairs_num; i++)
 		{
@@ -362,8 +368,8 @@ void DrawPairInfos(std::vector<cv::Mat> &images, std::list<PairInfo> &pairinfos,
 			cv::Scalar color(b, g, r);
 			cv::circle(result, iter->points1[i] * scale, 6, color, -1);
 			cv::Point2d pt2 = iter->points2[i] * scale;
-			pt2.x += left.cols;
-			if(!onlyPoints)cv::line(result, iter->points1[i] * scale, pt2, color, 3);
+			pt2.x += imgSize0.width;
+			if (!onlyPoints)cv::line(result, iter->points1[i] * scale, pt2, color, 3);
 			cv::circle(result, pt2, 6, color, -1);
 			//cv::imshow("showtemp", result);
 			//cv::waitKey(0);
@@ -375,4 +381,50 @@ void DrawPairInfos(std::vector<cv::Mat> &images, std::list<PairInfo> &pairinfos,
 	}
 }
 
+void DrawPairInfoHomo(const std::vector<cv::Mat> &images, const PairInfo &pairinfos, const cv::Mat &H)
+{
+	int index0 = pairinfos.index1, index1 = pairinfos.index2;
+	assert(images[index0].type() == images[index1].type());
 
+	cv::Size imgSize0(images[index0].size()), imgSize1(images[index1].size());
+	cv::Size resultSize(imgSize0.width + imgSize1.width, std::max(imgSize0.height, imgSize1.height));
+
+	double miniScale = FitSizeToScreen(resultSize.width, resultSize.height);
+	cv::Size miniSize0(imgSize0.width*miniScale, imgSize0.height*miniScale);
+	cv::Size miniSize1(imgSize1.width*miniScale, imgSize1.height*miniScale);
+	cv::Mat resizedImg0, resizedImg1;
+	cv::resize(images[pairinfos.index1], resizedImg0, miniSize0);
+	cv::resize(images[pairinfos.index2], resizedImg1, miniSize1);
+
+	int resultType = images[index0].type();
+	cv::Mat showImg(resultSize, resultType, cv::Scalar(0));
+	resizedImg0.copyTo(showImg(cv::Rect(0, 0, miniSize0.width, miniSize0.height)));
+	resizedImg1.copyTo(showImg(cv::Rect(miniSize0.width, 0, miniSize1.width, miniSize1.height)));
+
+	cv::Mat tempShow = showImg.clone();
+	for (size_t i = 0; i < pairinfos.pairs_num; i++)
+	{
+		if (pairinfos.mask[i] != 1)continue;
+		uchar r = rand() % 255;
+		uchar g = rand() % 255;
+		uchar b = rand() % 255;
+		cv::Scalar color(b, g, r);
+
+		cv::circle(showImg, pairinfos.points1[i] * miniScale, 6, color, -1);
+		cv::Point2f pt2 = pairinfos.points2[i] * miniScale;
+		pt2.x += resizedImg0.cols;
+		cv::line(showImg, pairinfos.points1[i] * miniScale, pt2, color, 2);
+		cv::circle(showImg, pt2, 3, color, -1);
+		cv::Point2f tempPt;
+		PointHTransform(pairinfos.points1[i], H, tempPt);
+		tempPt *= miniScale;
+		tempPt.x += resizedImg0.cols;
+		cv::line(showImg, pt2, tempPt, cv::Scalar(0, 0, 255), 1);
+		cv::Rect rect(tempPt - cv::Point2f(3, 3), tempPt + cv::Point2f(3, 3));
+		cv::rectangle(showImg, rect, cv::Scalar(0, 0, 255), 1);
+
+		cv::imshow("showImg", showImg);
+		showImg = tempShow.clone();
+		cv::waitKey(0);
+	}
+}

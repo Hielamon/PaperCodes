@@ -31,5 +31,8 @@
     <ClInclude Include="SequenceMatcher.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\common\stitchingCommonFuc.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
