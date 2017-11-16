@@ -1,8 +1,9 @@
-#include <OpencvCommon.h>
-#include "SequenceMatcher.h"
 #define MAIN_FILE
 #include <commonMacro.h>
 
+#include <OpencvCommon.h>
+#include "../common/SequenceMatcher.h"
+#include "../common/stitchingCommonFuc.h"
 
 void BlockStitching(const cv::Mat &src, cv::Mat &dst, cv::Rect srcRoi, cv::Rect dstRoi, 
 					cv::Mat &dstMask, const cv::Mat &H)
@@ -70,60 +71,6 @@ void BlockStitching(const cv::Mat &src, cv::Mat &dst, cv::Rect srcRoi, cv::Rect 
 			}
 		}
 	}
-}
-
-void GlobalHStitching(const cv::Mat &src1, const cv::Mat &src2, const cv::Mat &H, cv::Mat &dst)
-{
-	//decide the size of final image
-	std::vector<cv::Point2f> corners(4);
-	corners[0] = cv::Point2f(0, 0);
-	corners[1] = cv::Point2f(src1.cols, 0);
-	corners[2] = cv::Point2f(0, src1.rows);
-	corners[3] = cv::Point2f(src1.cols, src1.rows);
-
-	cv::Point2f tl(H_FLOAT_MAX, H_FLOAT_MAX);
-	cv::Point2f br(H_FLOAT_MIN, H_FLOAT_MIN);
-	for (auto &corner : corners)
-	{
-		cv::Point2f tcorner;
-		PointHTransform(corner, H, tcorner);
-		if (tcorner.x < tl.x) { tl.x = tcorner.x; }
-		if (tcorner.y < tl.y) { tl.y = tcorner.y; }
-		if (tcorner.x > br.x) { br.x = tcorner.x; }
-		if (tcorner.y > br.y) { br.y = tcorner.y; }
-	}
-	/*for (size_t i = 0; i < src1.rows; i++)
-	{
-		for (size_t j = 0; j < src1.cols; j++)
-		{
-			if (i > 0 && i < src1.rows - 1 && j > 0 && j < src1.cols - 1)continue;
-			cv::Point2f boundaryPt(j, i);
-			cv::Point2f tcorner;
-			PointHTransform(boundaryPt, H, tcorner);
-			if (tcorner.x < tl.x) { tl.x = tcorner.x; }
-			if (tcorner.y < tl.y) { tl.y = tcorner.y; }
-			if (tcorner.x > br.x) { br.x = tcorner.x; }
-			if (tcorner.y > br.y) { br.y = tcorner.y; }
-		}
-	}*/
-	/*tl = cv::Point2f(-src2.cols, -src2.rows);
-	br = cv::Point2f(src2.cols*2, src2.rows*2);*/
-
-
-	cv::Rect roi2(0, 0, src2.cols, src2.rows), roi1(tl, br);
-	cv::Rect dstRoi = GetUnionRoi(roi1, roi2);
-	
-	roi2.x -= dstRoi.x;
-	roi2.y -= dstRoi.y;
-
-	dst = cv::Mat(dstRoi.size(), CV_8UC3);
-	src2.copyTo(dst(roi2));
-
-	cv::Mat dstMask(dstRoi.size(), CV_8U, cv::Scalar(0));
-	cv::Mat src2Mask(src2.size(), CV_8U, cv::Scalar(255));
-	src2Mask.copyTo(dstMask(roi2));
-
-	BlockStitching(src1, dst, cv::Rect(0, 0, src1.cols, src1.rows), dstRoi, dstMask, H);
 }
 
 //using the nearest cluster model
@@ -411,8 +358,6 @@ void RawMovingDLTStitching(const cv::Mat &src1, const cv::Mat &src2, PairInfo &p
 	cv::Mat globalH = h.reshape(1, 3);
 	globalH = T2inv*globalH*T1;
 	cv::Mat globalDst2;
-	GlobalHStitching(src1, src2, globalH, globalDst2);
-	cv::imwrite("GlobalHStitching2.jpg", globalDst2);
 
 	//cv::Size cellSize(50, 50);
 	int width = src1.cols, height = src1.rows;
@@ -577,6 +522,153 @@ void RawMovingDLTStitching(const cv::Mat &src1, const cv::Mat &src2, PairInfo &p
 	
 }
 
+//Compute the moving DLT grid result
+//the result store the grid center coordinate and warped center corrdinate in resultPair
+void GetMovingDLTGridCenter(const PairInfo &pair, const std::vector<cv::Mat> &images,
+					  cv::Point gridDim, cv::Size gridSize, PairInfo &resultPair,
+					  double gamma = 0.01, double radiusRatio = 0.15)
+{
+	//Get the valid points
+	std::vector<cv::Point2f> srcPts1(pair.inliers_num), srcPts2(pair.inliers_num);
+	for (size_t i = 0, j = 0; i < pair.pairs_num; i++)
+	{
+		if (pair.mask[i] == 0) { continue; }
+		srcPts1[j] = pair.points1[i];
+		srcPts2[j] = pair.points2[i];
+		j++;
+	}
+
+	//Regularize the points
+	std::vector<cv::Point2f> pts1, pts2;
+	cv::Mat T1inv, T2inv;
+	GetRegularizedPoints(srcPts1, pts1, T1inv);
+	GetRegularizedPoints(srcPts2, pts2, T2inv);
+
+	//T1 and T2inv used for compute origin H = T2inv*H'*T1
+	cv::Mat T1 = T1inv.inv();
+
+	//get the origin A matrix
+	cv::Mat A(pair.inliers_num * 2, 9, CV_64F, cv::Scalar(0));
+	double *Aptr = reinterpret_cast<double *>(A.data);
+	for (size_t i = 0; i < pair.inliers_num; i++, Aptr += 18)
+	{
+		//H'*pt1 = pt2
+		cv::Point2f pt1 = pts1[i];
+		cv::Point2f pt2 = pts2[i];
+
+		Aptr[3] = -pt1.x;
+		Aptr[4] = -pt1.y;
+		Aptr[5] = -1;
+		Aptr[6] = pt2.y * pt1.x;
+		Aptr[7] = pt2.y * pt1.y;
+		Aptr[8] = pt2.y;
+
+		Aptr[9] = pt1.x;
+		Aptr[10] = pt1.y;
+		Aptr[11] = 1;
+		Aptr[15] = -pt2.x * pt1.x;
+		Aptr[16] = -pt2.x * pt1.y;
+		Aptr[17] = -pt2.x;
+	}
+
+	//Get the global Homograph matrix
+	cv::Mat W, U, VT;
+	cv::SVD::compute(A, W, U, VT);
+	cv::Mat h = VT.row(8);
+	cv::Mat globalH = h.reshape(1, 3);
+	globalH = T2inv*globalH*T1;
+
+	//Just for test the regular method which applied to the correspondence points
+	cv::Mat globalResult, globalResultMask;
+	cv::Mat mask1(images[0].size(), CV_8UC1, cv::Scalar(255));
+	cv::Mat mask2(images[1].size(), CV_8UC1, cv::Scalar(255));
+	GlobalHStitching(images[0], mask1, images[1], mask2, globalH, globalResult, globalResultMask);
+	cv::imwrite("GlobalHStitchingNorm.jpg", globalResult);
+
+	const cv::Mat &image1 = images[pair.index1];
+
+	//double radius = -2 * sigma2 * log(gamma);
+	double radius = radiusRatio * std::min(image1.cols, image1.rows);
+	radius *= radius;
+	double sigma2 = -radius / (2 * log(gamma));
+
+	std::cout << "impact radius = " << sqrt(radius) << std::endl;
+	std::cout << "cut gamma = " << gamma << std::endl;
+	std::cout << "sigma2 = " << sigma2 << std::endl;
+
+	std::vector<cv::Point2d> vCornerPt(4), vGridPt(4, cv::Point2d(0, 0));
+	vGridPt[1] = cv::Point2d(gridSize.width, 0);
+	vGridPt[2] = cv::Point2d(0, gridSize.height);
+	vGridPt[3] = cv::Point2d(gridSize.width, gridSize.height);
+	int XShift = gridDim.x * gridSize.width;
+
+
+	//Get the pair information of Moving DLT which stores the origin gridCenter and warped gridCenter
+	resultPair.pairs_num = resultPair.inliers_num = gridDim.x * gridDim.y;
+	resultPair.mask.resize(resultPair.pairs_num, 1);
+	resultPair.points1.resize(resultPair.pairs_num);
+	resultPair.points2.resize(resultPair.pairs_num);
+	for (int i = 0, yIdx = gridSize.height / 2, gridIdx = 0; i < gridDim.y; i++, yIdx += gridSize.height)
+	{
+		for (int j = 0, xIdx = gridSize.width / 2; j < gridDim.x; j++, xIdx += gridSize.width, gridIdx++)
+		{
+			int changeCount = 0;
+			cv::Mat Atemp = A.clone();
+			for (size_t k = 0; k < pair.inliers_num; k++)
+			{
+				float dx = srcPts1[k].x - xIdx;
+				float dy = srcPts1[k].y - yIdx;
+				double distant = dx*dx + dy*dy;
+				if (distant <= radius)
+				{
+					double wi = exp(-distant / (2 * sigma2));
+					wi /= gamma;
+					cv::Mat &rowTwo = Atemp.rowRange(k * 2, k * 2 + 2);
+					rowTwo *= wi;
+					changeCount++;
+				}
+			}
+
+			cv::Mat H_ = globalH;
+			if (changeCount > 0)
+			{
+				cv::Mat W_, U_, VT_;
+				cv::SVD::compute(Atemp, W_, U_, VT_);
+				cv::Mat h_ = VT_.row(8);
+				H_ = h_.reshape(1, 3);
+				H_ = T2inv*H_*T1;
+
+				double HMaxDist = 0;
+				for (size_t m = 0; m < 4; m++)
+				{
+					cv::Point2d localPt, globalPt, distPt;
+					PointHTransform(vGridPt[m], globalH, globalPt);
+					PointHTransform(vGridPt[m], H_, localPt);
+					distPt = localPt - globalPt;
+					HMaxDist = std::max(sqrt(distPt.dot(distPt)), HMaxDist);
+				}
+
+				if (HMaxDist > 0.4 * std::min(image1.rows, image1.cols))
+					H_ = globalH;
+			}
+
+			cv::Point2f gridCenter(xIdx, yIdx), warpedCenter;
+			PointHTransform(gridCenter, H_, warpedCenter);
+			resultPair.points1[gridIdx] = gridCenter;
+			resultPair.points2[gridIdx] = warpedCenter;
+
+			for (size_t m = 0; m < 4; m++)
+				vGridPt[m].x += gridSize.width;
+		}
+
+		for (size_t m = 0; m < 4; m++)
+		{
+			vGridPt[m].y += gridSize.height;
+			vGridPt[m].x -= XShift;
+		}
+	}
+}
+
 
 int main(int argc, char *argv[])
 {
@@ -599,22 +691,64 @@ int main(int argc, char *argv[])
 	std::cout << "Homography Ransac threshold = " << threshold << std::endl;
 	cv::Mat globalH = firstPair.findHomography(cv::RANSAC, threshold);
 	
-	cv::Point cellGrid(100, 100);
-	cv::Size cellSize(std::ceil(width / double(cellGrid.x)), std::ceil(height / double(cellGrid.y)));
-	cv::Size extSize1(cellGrid.x * cellSize.width, cellGrid.y * cellSize.height);
+	cv::Point gridDim(50, 50);
+	cv::Size gridSize(std::ceil(width / double(gridDim.x)), std::ceil(height / double(gridDim.y)));
+	cv::Size extSize1(gridDim.x * gridSize.width, gridDim.y * gridSize.height);
 	cv::Mat ext1(extSize1, CV_8UC3, cv::Scalar(0));
 	images[0].copyTo(ext1(cv::Rect(0, 0, images[0].cols, images[0].rows)));
 	images[0] = ext1;
 
-	//DrawGrid(images[0], cellGrid, cellSize, 1, 2);
+	//DrawGrid(images[0], gridDim, gridSize, 2);
 
-	/*cv::Mat dstGlobal;
-	GlobalHStitching(images[0], images[1], globalH, dstGlobal);
-	cv::imwrite("GlobalHStitching.jpg", dstGlobal);*/
+	cv::Mat globalResult, globalResultMask;
+	cv::Mat mask1(images[0].size(), CV_8UC1, cv::Scalar(255));
+	cv::Mat mask2(images[1].size(), CV_8UC1, cv::Scalar(255));
+	GlobalHStitching(images[0], mask1, images[1], mask2, globalH, globalResult, globalResultMask);
+	cv::imwrite("GlobalHStitching.jpg", globalResult);
 
-	cv::Mat dstAPAP;
-	RawMovingDLTStitching(images[0], images[1], firstPair, dstAPAP, cellGrid, cellSize);
-	cv::imwrite("APAPStitching.jpg", dstAPAP);
+	/*cv::Mat dstAPAP;
+	RawMovingDLTStitching(images[0], images[1], firstPair, dstAPAP, gridDim, gridSize);
+	cv::imwrite("APAPStitching.jpg", dstAPAP);*/
+
+	PairInfo gridCenterPair;
+	GetMovingDLTGridCenter(firstPair, images, gridDim, gridSize, gridCenterPair);
+	std::vector<cv::Point2d> vVertices;
+	EstimateGridVertices(gridCenterPair, globalH, gridDim, gridSize, images, vVertices, 10.0);
+
+	{
+		cv::Mat showTest = images[1].clone();
+		DrawGrid(showTest, gridDim, gridSize, 1, 3);
+
+		cv::Mat resultTest = images[1].clone() * 0.6;
+		DrawGridVertices(resultTest, cv::Rect(0, 0, resultTest.cols, resultTest.rows), vVertices, gridDim, 1, 2);
+
+		cv::imwrite("resultTest.jpg", resultTest);
+		cv::imwrite("showTest.jpg", showTest);
+	}
+
+	cv::Mat warpedResult, warpedMask;
+	cv::Rect warpedROI;
+	GridWarping(images[0], cv::Mat(), gridDim, gridSize, vVertices, warpedResult, warpedMask, warpedROI);
+	
+	cv::imwrite("warpedResult.jpg", warpedResult);
+	cv::imwrite("warpedMask.jpg", warpedMask);
+
+	cv::Rect img1ROI(0, 0, images[1].cols, images[1].rows);
+	cv::Mat img1Mask(images[1].rows, images[1].cols, CV_8UC1, cv::Scalar(255));
+	std::vector<cv::Mat> vPreparedImg, vPreparedMask;
+	std::vector<cv::Rect> vROI;
+
+	vPreparedImg.push_back(images[1]);
+	vPreparedMask.push_back(img1Mask);
+	vROI.push_back(img1ROI);
+	vPreparedImg.push_back(warpedResult);
+	vPreparedMask.push_back(warpedMask);
+	vROI.push_back(warpedROI);
+
+	cv::Mat resultImg, resultImgMask;
+	AverageMerge(vPreparedImg, vPreparedMask, vROI, resultImg, resultImgMask);
+	cv::imwrite("resultImg.jpg", resultImg);
+	cv::imwrite("resultImgMask.jpg", resultImgMask);
 
 	DrawPairInfos(images, pairinfos, true);
 	

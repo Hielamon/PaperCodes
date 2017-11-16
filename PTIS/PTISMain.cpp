@@ -2,51 +2,12 @@
 #include <commonMacro.h>
 
 #include <OpencvCommon.h>
-#include "SequenceMatcher.h"
+#include "../common/SequenceMatcher.h"
 #include <Eigen/Sparse>
 #include <sstream>
 #include "../common/stitchingCommonFuc.h"
 
 int dotR = 2, lineW = 2;
-
-
-void GlobalHStitching(const cv::Mat &src1, const cv::Mat &mask1, const cv::Mat &src2, const cv::Mat &mask2,
-					  const cv::Mat &H, cv::Mat &dst, cv::Mat &maskDst)
-{
-	cv::Point gridDim(1, 1);
-	cv::Size gridSize(src1.cols, src1.rows);
-	int verticeNum = (gridDim.x + 1) * (gridDim.y + 1);
-	std::vector<cv::Point2d> vVertices(verticeNum);
-
-	for (size_t i = 0; i < verticeNum; i++)
-	{
-		int r = i / (gridDim.x + 1), c = i - r * (gridDim.x + 1);
-		cv::Point2d vertPt(c * gridSize.width, r * gridSize.height);
-		if (!PointHTransform(vertPt, H, vVertices[i]))
-			HL_CERR("Failed to Transform point by Homograph Matrix");
-	}
-
-	cv::Mat gridResult = src2.clone() * 0.6;
-	DrawGridVertices(gridResult, vVertices, gridDim, 2, 3);
-	cv::imwrite("gridResultGlobal.jpg", gridResult);
-
-	cv::Mat warpedResult, warpedMask;
-	cv::Rect warpedROI;
-	GridWarping(src1, mask1, gridDim, gridSize, vVertices, warpedResult, warpedMask, warpedROI);
-	std::vector<cv::Mat> vPreparedImg, vPreparedMask;
-	std::vector<cv::Rect> vROI;
-
-	vPreparedImg.push_back(src2);
-	vPreparedMask.push_back(mask2);
-	vROI.push_back(cv::Rect(0, 0, src2.cols, src2.rows));
-
-	vPreparedImg.push_back(warpedResult);
-	vPreparedMask.push_back(warpedMask);
-	vROI.push_back(warpedROI);
-
-	AverageMerge(vPreparedImg, vPreparedMask, vROI, dst, maskDst);
-}
-
 
 void buildProblemTest(const PairInfo &pair, const cv::Mat &H, cv::Size cellNum, cv::Size cellSize,
 				  std::vector<Eigen::Triplet<double>> &vTriplet, Eigen::VectorXd &b, std::vector<cv::Mat> &images)
@@ -333,7 +294,7 @@ void buildProblemTest(const PairInfo &pair, const cv::Mat &H, cv::Size cellNum, 
 int main(int argc, char *argv[])
 {
 	std::vector<cv::Mat> images;
-	std::string dir = "test2";
+	std::string dir = "test3";
 	if (argc == 2)
 		dir = std::string(argv[1]);
 	LoadSameSizeImages(images, dir);
@@ -393,7 +354,7 @@ int main(int argc, char *argv[])
 	}
 	else
 	{
-		EstimateGridVertices(firstPair, globalH, gridDim, gridSize, images, vVertices, 3.0);
+		EstimateGridVertices(firstPair, globalH, gridDim, gridSize, images, vVertices, 30.0);
 	}
 
 	{
@@ -401,8 +362,7 @@ int main(int argc, char *argv[])
 		DrawGrid(showTest, gridDim, gridSize, 1, 3);
 
 		cv::Mat resultTest = images[1].clone() * 0.6;
-		DrawGridVertices(resultTest, vVertices, gridDim, 2, 3);
-
+		DrawGridVertices(resultTest, cv::Rect(0, 0, resultTest.cols, resultTest.rows), vVertices, gridDim, 2, 3);
 
 		cv::imwrite("resultTest.jpg", resultTest);
 		cv::imwrite("showTest.jpg", showTest);
@@ -414,18 +374,18 @@ int main(int argc, char *argv[])
 	GlobalHStitching(images[0], mask1, images[1], mask2, globalH, globalResult, globalResultMask);
 	cv::imwrite("GlobalHStitching.jpg", globalResult);
 
-	cv::Mat extImg0(gridDim.y* gridSize.height, gridDim.x * gridSize.width, CV_8UC3, cv::Scalar(0));
-	cv::Mat extMask0(gridDim.y* gridSize.height, gridDim.x * gridSize.width, CV_8UC1, cv::Scalar(0));
-	cv::Rect img0ROI(0, 0, images[0].cols, images[0].rows);
-	cv::rectangle(extMask0, img0ROI, cv::Scalar(255), -1);
-	images[0].copyTo(extImg0(img0ROI));
+	cv::Mat &image1 = images[firstPair.index1];
 	//DrawGrid(extImg0, gridDim, cellSize, 2, 3);
 	
 	cv::Mat warpedResult, warpedMask;
 	cv::Rect warpedROI;
-	GridWarping(extImg0, extMask0, gridDim, gridSize, vVertices, warpedResult, warpedMask, warpedROI);
+	GridWarping(image1, cv::Mat(), gridDim, gridSize, vVertices, warpedResult, warpedMask, warpedROI);
 	cv::imwrite("warpedResult.jpg", warpedResult);
 	cv::imwrite("warpedMask.jpg", warpedMask);
+
+	cv::Mat warpedResultGrid = warpedResult.clone();
+	DrawGridVertices(warpedResultGrid, warpedROI, vVertices, gridDim, 1, 1);
+	cv::imwrite("warpedResultGrid.jpg", warpedResultGrid);
 
 	cv::Rect img1ROI(0, 0, images[1].cols, images[1].rows);
 	cv::Mat img1Mask(images[1].rows, images[1].cols, CV_8UC1, cv::Scalar(255));

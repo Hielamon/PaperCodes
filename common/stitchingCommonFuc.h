@@ -3,8 +3,11 @@
 #include <opencv2/calib3d/calib3d.hpp>
 #include <Eigen/Sparse>
 #include <commonMacro.h>
+#include <algorithm>
+#include "SequenceMatcher.h"
 
-inline void GridMapping(cv::Mat Hinv, cv::Rect srcROI, cv::Rect dstROI, 
+//The Mapping function use the inverse Homograph matrix
+inline void HomographMapping(cv::Mat Hinv, cv::Rect srcROI, cv::Rect dstROI, 
 						const cv::Mat &src, cv::Mat &dst,
 						const cv::Mat &srcMask, cv::Mat &dstMask)
 {
@@ -36,15 +39,230 @@ inline void GridMapping(cv::Mat Hinv, cv::Rect srcROI, cv::Rect dstROI,
 	}
 }
 
-//the size of src should be equal to the gridSize * gridDim
+//GridMapping function which is used to mapping the grid
+//vCornerPt is the vector(4) in the destination image ROI, which is correspond to the vGridPt vector(4) in src
+//dstROIShift is the shift magnitude for moving the dstROI's tl point to (0, 0)
+inline bool GridMapping(const std::vector<cv::Point2d> &vCornerPt, const std::vector<cv::Point2d> &vGridPt, 
+						cv::Point dstROIShift, const cv::Mat &src, cv::Mat &dst,
+						const cv::Mat &srcMask, cv::Mat &dstMask, bool processTwist = false)
+{
+
+	//Check the vector size
+	if (vCornerPt.size() != 4 || vGridPt.size() != 4)
+		HL_CERR("The input vCornerPt and vGridPt must only contains 4 elements");
+
+	//Draw grid for test
+	/*cv::line(dst, vCornerPt[0] + cv::Point2d(dstROIShift), vCornerPt[1] + cv::Point2d(dstROIShift), cv::Scalar(0, 255, 255), 1, cv::LINE_AA);
+	cv::line(dst, vCornerPt[1] + cv::Point2d(dstROIShift), vCornerPt[3] + cv::Point2d(dstROIShift), cv::Scalar(255, 255, 0), 1, cv::LINE_AA);
+	cv::line(dst, vCornerPt[3] + cv::Point2d(dstROIShift), vCornerPt[2] + cv::Point2d(dstROIShift), cv::Scalar(0, 255, 255), 1, cv::LINE_AA);
+	cv::line(dst, vCornerPt[2] + cv::Point2d(dstROIShift), vCornerPt[0] + cv::Point2d(dstROIShift), cv::Scalar(255, 255, 0), 1, cv::LINE_AA);*/
+
+	//Check the validity of vCornerPt and vGridPt
+	cv::Size srcSize = src.size(), dstSize = dst.size();
+	bool ptValid = true;
+	for (size_t m = 0; m < 4; m++)
+	{
+		ptValid &= CheckInSize(vGridPt[m], srcSize);
+		ptValid &= CheckInSize(vCornerPt[m] + cv::Point2d(dstROIShift), dstSize);
+	}
+
+	if(!ptValid)
+		HL_CERR("The input point exceed the image size");
+
+	//Analysis the grid quadrilateral
+	std::vector<cv::Vec3d> vCornerPt_(4);
+	for (size_t m = 0; m < 4; m++)
+		vCornerPt_[m] = cv::Vec3d(vCornerPt[m].x, vCornerPt[m].y, 1);
+
+	//Get the cross point of diagonal line
+	cv::Vec3d line03 = vCornerPt_[0].cross(vCornerPt_[3]);
+	cv::Vec3d line12 = vCornerPt_[1].cross(vCornerPt_[2]);
+	cv::Vec3d crossPt_ = line03.cross(line12);
+	if (std::abs(crossPt_.dot(crossPt_)) <= 1e-16)
+	{
+		//std::cout << "std::abs(crossPt_.dot(crossPt_)) <= 1e-16" << std::endl;
+		return false;
+	}
+
+	cv::Point2d crossPt(crossPt_[0] / crossPt_[2], crossPt_[1] / crossPt_[2]);
+
+	//Get the delata vector from grid corner to the cross point
+	std::vector<cv::Vec2d> vDelta(4);
+	for (size_t m = 0; m < 4; m++)
+		vDelta[m] = cv::Vec2d(crossPt.x - vCornerPt[m].x, crossPt.y - vCornerPt[m].y);
+
+	//decide whether the cross point on the diagonal lines
+	double proof03 = vDelta[0].dot(vDelta[3]);
+	double proof12 = vDelta[1].dot(vDelta[2]);
+	cv::Point cornerTl, cornerBr;
+	if (proof03 < 0 && proof12 < 0)
+	{
+		cornerTl = vCornerPt[0];
+		cornerBr = cornerTl;
+		for (size_t m = 0; m < 4; m++)
+		{
+			const cv::Point2d &pt = vCornerPt[m];
+			if (cornerTl.x > pt.x)cornerTl.x = floor(pt.x);
+			if (cornerTl.y > pt.y)cornerTl.y = floor(pt.y);
+			if (cornerBr.x < pt.x)cornerBr.x = ceil(pt.x);
+			if (cornerBr.y < pt.y)cornerBr.y = ceil(pt.y);
+		}
+
+		std::vector<uchar> inlierMask(4, 1);
+		cv::Mat gridHinv = cv::findHomography(vCornerPt, vGridPt, inlierMask);
+
+		cv::Rect srcGridROI(vGridPt[0], vGridPt[3]), dstGridROI(cornerTl, cornerBr),
+			dstGridROI_(cornerTl + dstROIShift, cornerBr + dstROIShift);
+
+		HomographMapping(gridHinv, srcGridROI, dstGridROI, src(srcGridROI), dst(dstGridROI_), srcMask(srcGridROI), dstMask(dstGridROI_));
+	}
+	else if (proof03 > 0 && proof12 > 0)
+	{
+		//The quadrangle is twisty, then we change the order of vCornerPt
+		//and mapping the new grid vCornerTwistyPt which just change the vCornerPt's 3 and 1 pos
+		//std::cout << "twisty situation" << std::endl;
+		if (processTwist)
+		{
+
+			bool find_mapping = false;
+			for (size_t m = 1; m < 4; m++)
+			{
+				std::vector<cv::Point2d> vCornerTwistyPt = vCornerPt;
+				vCornerTwistyPt[0] += vCornerTwistyPt[m];
+				vCornerTwistyPt[m] = vCornerTwistyPt[0] - vCornerTwistyPt[m];
+				vCornerTwistyPt[0] = vCornerTwistyPt[0] - vCornerTwistyPt[m];
+
+				//TODO: Maybe there is a more reasonable strategy
+				if ((find_mapping = GridMapping(vCornerTwistyPt, vGridPt, dstROIShift, src, dst, srcMask, dstMask)))
+					break;
+			}
+			return find_mapping;
+		}
+		else
+			return false;
+		//continue;
+	}
+	else if (proof03 == 0 && proof12 == 0)
+	{
+		//Only choose one bigest triangle for warp
+		//std::cout << "Only choose one bigest triangle for warp" << std::endl;
+		int maxIdx1 = 0, maxIdx2 = 0, minIdx = 0;
+		double max1 = 0, max2 = 0, min = vDelta[0].dot(vDelta[0]);
+		for (int m = 0; m < 4; m++)
+		{
+			double distant2 = vDelta[m].dot(vDelta[m]);
+			if (distant2 > max1)
+			{
+				max2 = max1;
+				maxIdx2 = maxIdx1;
+				max1 = distant2;
+				maxIdx1 = m;
+			}
+			else if (distant2 > max2)
+			{
+				max2 = distant2;
+				maxIdx2 = m;
+			}
+
+			if (distant2 < min)
+			{
+				min = distant2;
+				minIdx = m;
+			}
+		}
+
+		cv::Point2f vTrianglePt[3], vTriangleGridPt[3];
+		vTrianglePt[0] = crossPt;
+		vTrianglePt[1] = vCornerPt[maxIdx1];
+		vTrianglePt[2] = vCornerPt[maxIdx2];
+
+		vTriangleGridPt[0] = vGridPt[minIdx];
+		vTriangleGridPt[1] = vGridPt[maxIdx1];
+		vTriangleGridPt[2] = vGridPt[maxIdx2];
+
+		cornerTl.x = floor(std::min(crossPt.x, std::min(vCornerPt[maxIdx1].x, vCornerPt[maxIdx2].x)));
+		cornerTl.y = floor(std::min(crossPt.y, std::min(vCornerPt[maxIdx1].y, vCornerPt[maxIdx2].y)));
+		cornerBr.x = ceil(std::max(crossPt.x, std::max(vCornerPt[maxIdx1].x, vCornerPt[maxIdx2].x)));
+		cornerBr.y = ceil(std::max(crossPt.y, std::max(vCornerPt[maxIdx1].y, vCornerPt[maxIdx2].y)));
+
+		cv::Mat warpAffine = cv::getAffineTransform(vTrianglePt, vTriangleGridPt);
+		cv::Mat warpH = cv::Mat::eye(3, 3, CV_64FC1);
+		warpAffine.copyTo(warpH(cv::Rect(0, 0, 3, 2)));
+
+		cv::Rect srcGridROI(vGridPt[0], vGridPt[3]), dstGridROI(cornerTl, cornerBr),
+			dstGridROI_(cornerTl + dstROIShift, cornerBr + dstROIShift);
+
+		HomographMapping(warpH, srcGridROI, dstGridROI, src(srcGridROI), dst(dstGridROI_), srcMask(srcGridROI), dstMask(dstGridROI_));
+	}
+	else
+	{
+		std::vector<int> vIdx1 = { 0, 3 }, vIdx2 = { 1, 2 };
+
+		std::vector<int> &digIdx = proof03 < 0 ? vIdx2 : vIdx1;
+		std::vector<int> &angIdx = proof03 < 0 ? vIdx1 : vIdx2;
+
+		//std::cout << "proof03 = " << proof03 << "    proof12 = " << proof12 << std::endl;
+
+		for (size_t m = 0; m < 2; m++)
+		{
+			std::vector<int> tIdx = { digIdx[0], digIdx[1], angIdx[m] };
+			cv::Point2f vTrianglePt[3], vTriangleGridPt[3];
+			cornerTl = vCornerPt[tIdx[0]];
+			cornerBr = cornerTl;
+			for (size_t n = 0; n < 3; n++)
+			{
+				int &idxTmp = tIdx[n];
+				vTrianglePt[n] = vCornerPt[idxTmp];
+				vTriangleGridPt[n] = vGridPt[idxTmp];
+
+				cornerTl.x = std::min(cornerTl.x, int(floor(vTrianglePt[n].x)));
+				cornerTl.y = std::min(cornerTl.y, int(floor(vTrianglePt[n].y)));
+				cornerBr.x = std::max(cornerBr.x, int(ceil(vTrianglePt[n].x)));
+				cornerBr.y = std::max(cornerBr.y, int(ceil(vTrianglePt[n].y)));
+			}
+
+			cv::Mat warpAffine = cv::getAffineTransform(vTrianglePt, vTriangleGridPt);
+			cv::Mat warpH = cv::Mat::eye(3, 3, CV_64FC1);
+			warpAffine.copyTo(warpH(cv::Rect(0, 0, 3, 2)));
+
+			cv::Rect srcGridROI(vGridPt[0], vGridPt[3]), dstGridROI(cornerTl, cornerBr),
+				dstGridROI_(cornerTl + dstROIShift, cornerBr + dstROIShift);
+
+			HomographMapping(warpH, srcGridROI, dstGridROI, src(srcGridROI), dst(dstGridROI_), srcMask(srcGridROI), dstMask(dstGridROI_));
+		}
+	}
+
+	
+
+	//Draw grid for test
+	/*cv::line(dstMask, vCornerPt[0] + cv::Point2d(dstROIShift), vCornerPt[1] + cv::Point2d(dstROIShift), cv::Scalar(100), 1, cv::LINE_AA);
+	cv::line(dstMask, vCornerPt[1] + cv::Point2d(dstROIShift), vCornerPt[3] + cv::Point2d(dstROIShift), cv::Scalar(200), 1, cv::LINE_AA);
+	cv::line(dstMask, vCornerPt[3] + cv::Point2d(dstROIShift), vCornerPt[2] + cv::Point2d(dstROIShift), cv::Scalar(100), 1, cv::LINE_AA);
+	cv::line(dstMask, vCornerPt[2] + cv::Point2d(dstROIShift), vCornerPt[0] + cv::Point2d(dstROIShift), cv::Scalar(200), 1, cv::LINE_AA);*/
+
+	return true;
+}
+
 inline void GridWarping(const cv::Mat& src, const cv::Mat& srcMask, const cv::Point& gridDim, const cv::Size &gridSize,
 						const std::vector<cv::Point2d> &vVertices, 
 						cv::Mat &dst, cv::Mat &mask, cv::Rect &resultROI)
 {
 	assert(src.type() == CV_8UC3);
-	assert(srcMask.type() == CV_8UC1);
+	assert(srcMask.type() == CV_8UC1 || srcMask.empty());
 	assert(vVertices.size() == (gridDim.x + 1) * (gridDim.y + 1));
-	assert(src.rows == gridDim.y*gridSize.height && src.cols == gridDim.x*gridSize.width);
+	
+	cv::Size srcSize_(gridDim.x*gridSize.width + 1, gridDim.y*gridSize.height + 1);
+	srcSize_.width = src.cols > srcSize_.width ? src.cols : srcSize_.width;
+	srcSize_.height = src.rows > srcSize_.height ? src.rows : srcSize_.height;
+	cv::Mat src_(srcSize_, CV_8UC3, cv::Scalar(0));
+	cv::Mat srcMask_(srcSize_, CV_8UC1, cv::Scalar(0));
+	cv::Rect srcROI(0, 0, src.cols, src.rows);
+	src.copyTo(src_(srcROI));
+	if (!srcMask.empty() && srcMask.size() == src.size())
+		srcMask.copyTo(srcMask_(srcROI));
+	else
+		cv::rectangle(srcMask_, srcROI, cv::Scalar(255), -1);
+
 	cv::Point gridTl(vVertices[0]), gridBr = gridTl;
 	for (int i = 0; i < vVertices.size(); i++)
 	{
@@ -57,6 +275,11 @@ inline void GridWarping(const cv::Mat& src, const cv::Mat& srcMask, const cv::Po
 
 	resultROI = cv::Rect(gridTl, gridBr);
 	cv::Point vertShift = -resultROI.tl();
+
+	//To avoid the size check;
+	resultROI.width++;
+	resultROI.height++;
+
 	dst = cv::Mat(resultROI.height, resultROI.width, CV_8UC3, cv::Scalar(0));
 	mask = cv::Mat(resultROI.height, resultROI.width, CV_8UC1, cv::Scalar(0));
 
@@ -75,32 +298,160 @@ inline void GridWarping(const cv::Mat& src, const cv::Mat& srcMask, const cv::Po
 	{
 		for (int j = 0; j < gridDim.x; j++)
 		{
-			cornerTl = vVertices[vCornerIdx[0]];
-			cornerBr = cornerTl;
 			for (size_t m = 0; m < 4; m++)
-			{
 				vCornerPt[m] = vVertices[vCornerIdx[m]];
 
-				cv::Point2d &pt = vCornerPt[m];
-				if (cornerTl.x > pt.x)cornerTl.x = floor(pt.x);
-				if (cornerTl.y > pt.y)cornerTl.y = floor(pt.y);
-				if (cornerBr.x < pt.x)cornerBr.x = ceil(pt.x);
-				if (cornerBr.y < pt.y)cornerBr.y = ceil(pt.y);
-			}
+			GridMapping(vCornerPt, vGridPt, vertShift, src_, dst, srcMask_, mask, true);
+			/*
+			//Analysis the grid quadrilateral
+			std::vector<cv::Vec3d> vCornerPt_(4);
+			for (size_t m = 0; m < 4; m++)
+				vCornerPt_[m] = cv::Vec3d(vCornerPt[m].x, vCornerPt[m].y, 1);
+			
+			//Get the cross point of diagonal line
+			cv::Vec3d line03 = vCornerPt_[0].cross(vCornerPt_[3]);
+			cv::Vec3d line12 = vCornerPt_[1].cross(vCornerPt_[2]);
+			cv::Vec3d crossPt_ = line03.cross(line12);
+			bool valid = std::abs(crossPt_.dot(crossPt_)) > 1e-16;
 
-			std::vector<uchar> inlierMask(4, 1);
-			cv::Mat gridHinv = cv::findHomography(vCornerPt, vGridPt, inlierMask, cv::LMEDS);
+			if (valid)
+			{
+				cv::Point2d crossPt(crossPt_[0] / crossPt_[2], crossPt_[1] / crossPt_[2]);
 
-			cv::Rect srcGridROI(vGridPt[0], vGridPt[3]), dstGridROI(cornerTl, cornerBr),
-				dstGridROI_(cornerTl + vertShift, cornerBr + vertShift);
-			GridMapping(gridHinv, srcGridROI, dstGridROI, src(srcGridROI), dst(dstGridROI_), srcMask(srcGridROI), mask(dstGridROI_));
+				//Get the delata vector from grid corner to the cross point
+				std::vector<cv::Vec2d> vDelta(4);
+				for (size_t m = 0; m < 4; m++)
+					vDelta[m] = cv::Vec2d(crossPt.x - vCornerPt[m].x, crossPt.y - vCornerPt[m].y);
 
+				//decide whether the cross point on the diagonal lines
+				double proof03 = vDelta[0].dot(vDelta[3]);
+				double proof12 = vDelta[1].dot(vDelta[2]);
+
+				if (proof03 < 0 && proof12 < 0)
+				{
+					cornerTl = vCornerPt[0];
+					cornerBr = cornerTl;
+					for (size_t m = 0; m < 4; m++)
+					{
+
+						cv::Point2d &pt = vCornerPt[m];
+						if (cornerTl.x > pt.x)cornerTl.x = floor(pt.x);
+						if (cornerTl.y > pt.y)cornerTl.y = floor(pt.y);
+						if (cornerBr.x < pt.x)cornerBr.x = ceil(pt.x);
+						if (cornerBr.y < pt.y)cornerBr.y = ceil(pt.y);
+					}
+
+					std::vector<uchar> inlierMask(4, 1);
+					cv::Mat gridHinv = cv::findHomography(vCornerPt, vGridPt, inlierMask);
+					//cv::Mat gridHinv = cv::getAffineTransform(&vCornerPt[0], &vGridPt[0]);
+
+					cv::Rect srcGridROI(vGridPt[0], vGridPt[3]), dstGridROI(cornerTl, cornerBr),
+						dstGridROI_(cornerTl + vertShift, cornerBr + vertShift);
+					if (srcGridROI.x < 0 || srcGridROI.y < 0)
+					{
+						std::cout << i << " " << j << " " << srcGridROI << std::endl;
+					}
+					HomographMapping(gridHinv, srcGridROI, dstGridROI, src_(srcGridROI), dst(dstGridROI_), srcMask_(srcGridROI), mask(dstGridROI_));
+				}
+				else if (proof03 > 0 && proof12 > 0)
+				{
+					//The quadrangle is twisty
+					valid = false;
+					std::cout << "twisty situation" << std::endl;
+					//continue;
+				}
+				else if (proof03 == 0 && proof12 == 0)
+				{
+					//Only choose one bigest triangle for warp
+					int maxIdx1 = 0, maxIdx2 = 0, minIdx = 0;
+					double max1 = 0, max2 = 0, min = vDelta[0].dot(vDelta[0]);
+					for (int m = 0; m < 4; m++)
+					{
+						double distant2 = vDelta[m].dot(vDelta[m]);
+						if (distant2 > max1)
+						{
+							max2 = max1;
+							maxIdx2 = maxIdx1;
+							max1 = distant2;
+							maxIdx1 = m;
+						}
+						else if (distant2 > max2)
+						{
+							max2 = distant2;
+							maxIdx2 = m;
+						}
+
+						if (distant2 < min)
+						{
+							min = distant2;
+							minIdx = m;
+						}
+					}
+
+					cv::Point2f vTrianglePt[3], vTriangleGridPt[3];
+					vTrianglePt[0] = crossPt;
+					vTrianglePt[1] = vCornerPt[maxIdx1];
+					vTrianglePt[2] = vCornerPt[maxIdx2];
+
+					vTriangleGridPt[0] = vGridPt[minIdx];
+					vTriangleGridPt[1] = vGridPt[maxIdx1];
+					vTriangleGridPt[2] = vGridPt[maxIdx2];
+
+					cornerTl.x = floor(std::min(crossPt.x, std::min(vCornerPt[maxIdx1].x, vCornerPt[maxIdx2].x)));
+					cornerTl.y = floor(std::min(crossPt.y, std::min(vCornerPt[maxIdx1].y, vCornerPt[maxIdx2].y)));
+					cornerBr.x = ceil(std::max(crossPt.x, std::max(vCornerPt[maxIdx1].x, vCornerPt[maxIdx2].x)));
+					cornerBr.y = ceil(std::max(crossPt.y, std::max(vCornerPt[maxIdx1].y, vCornerPt[maxIdx2].y)));
+
+					cv::Mat warpH = cv::getAffineTransform(vTrianglePt, vTriangleGridPt);
+
+					cv::Rect srcGridROI(vGridPt[0], vGridPt[3]), dstGridROI(cornerTl, cornerBr),
+						dstGridROI_(cornerTl + vertShift, cornerBr + vertShift);
+					HomographMapping(warpH, srcGridROI, dstGridROI, src_(srcGridROI), dst(dstGridROI_), srcMask_(srcGridROI), mask(dstGridROI_));
+				}
+				else
+				{
+					std::vector<int> vIdx1 = { 0, 3 }, vIdx2 = { 1, 2 };
+
+					std::vector<int> &digIdx = proof03 < 0 ? vIdx2 : vIdx1;
+					std::vector<int> &angIdx = proof03 < 0 ? vIdx1 : vIdx2;
+
+					//std::cout << "proof03 = " << proof03 << "    proof12 = " << proof12 << std::endl;
+
+					for (size_t m = 0; m < 2; m++)
+					{
+						std::vector<int> tIdx = { digIdx[0], digIdx[1], angIdx[m] };
+						cv::Point2f vTrianglePt[3], vTriangleGridPt[3];
+						cornerTl = vCornerPt[tIdx[0]];
+						cornerBr = cornerTl;
+						for (size_t n = 0; n < 3; n++)
+						{
+							int &idxTmp = tIdx[n];
+							vTrianglePt[n] = vCornerPt[idxTmp];
+							vTriangleGridPt[n] = vGridPt[idxTmp];
+
+							cornerTl.x = std::min(cornerTl.x, int(floor(vTrianglePt[n].x)));
+							cornerTl.y = std::min(cornerTl.y, int(floor(vTrianglePt[n].y)));
+							cornerBr.x = std::max(cornerBr.x, int(ceil(vTrianglePt[n].x)));
+							cornerBr.y = std::max(cornerBr.y, int(ceil(vTrianglePt[n].y)));
+						}
+
+						cv::Mat warpAffine = cv::getAffineTransform(vTrianglePt, vTriangleGridPt);
+						cv::Mat warpH = cv::Mat::eye(3, 3, CV_64FC1);
+						warpAffine.copyTo(warpH(cv::Rect(0, 0, 3, 2)));
+
+						cv::Rect srcGridROI(vGridPt[0], vGridPt[3]), dstGridROI(cornerTl, cornerBr),
+							dstGridROI_(cornerTl + vertShift, cornerBr + vertShift);
+						HomographMapping(warpH, srcGridROI, dstGridROI, src_(srcGridROI), dst(dstGridROI_), srcMask_(srcGridROI), mask(dstGridROI_));
+					}
+				}
+			}*/
+
+			
 			for (size_t m = 0; m < 4; m++)
 			{
 				vCornerIdx[m]++;
 				vGridPt[m].x += gridSize.width;
 			}
-				
 		}
 
 		for (size_t m = 0; m < 4; m++)
@@ -115,7 +466,8 @@ inline void GridWarping(const cv::Mat& src, const cv::Mat& srcMask, const cv::Po
 }
 
 //simplest average merging function
-inline void AverageMerge(const std::vector<cv::Mat> &vImage, const std::vector<cv::Mat> &vMask,
+//Return the result ROI;
+inline cv::Rect AverageMerge(const std::vector<cv::Mat> &vImage, const std::vector<cv::Mat> &vMask,
 						  const std::vector<cv::Rect> &vROI, cv::Mat &result, cv::Mat &resultMask)
 {
 	//Check the input
@@ -169,17 +521,20 @@ inline void AverageMerge(const std::vector<cv::Mat> &vImage, const std::vector<c
 	}
 
 	cv::threshold(resultMask, resultMask, 0, 255, cv::THRESH_BINARY);
+	return resultROI;
 }
 
+#define BUILDPROBLEMDEBUG
 //Get the vertice warp problem's sparse matrix elements vTriplet and b
 //vPresetVert is the preset of vertices , it is always set according the global Homography Matrix
 //gamma : control the weight of point-correspond constraint
 //alpha : control the weight of preset vertices constraint
 //beta  : control the weight of shape constraint which is inroduced from content-preserving warp
+//forceAlpha : force the preset vertices constraint which will not be ignored by pair points
 inline void buildProblem(const PairInfo &pair, const std::vector<cv::Point2d> &vPresetVert,
 				  const std::vector<cv::Mat> &images, cv::Point gridDim, cv::Size gridSize,
 				  std::vector<Eigen::Triplet<double>> &vTriplet, Eigen::VectorXd &b,
-				  double gamma = 1, double alpha = 1e-4, double beta = 1e-5)
+				  double gamma = 1, double alpha = 1e-4, double beta = 1e-5, bool forceAlpha = false)
 {
 	int verticeNum = (gridDim.x + 1) * (gridDim.y + 1), paramNum = verticeNum * 2;
 	b.resize(paramNum);
@@ -236,7 +591,7 @@ inline void buildProblem(const PairInfo &pair, const std::vector<cv::Point2d> &v
 	{
 		for (int i = 0, rIdx = 0; i < verticeNum; i++, rIdx += 2)
 		{
-			if (!nSumFCount[i])
+			if (forceAlpha || !nSumFCount[i])
 			{
 				denseMatrix[rIdx][rIdx] += alpha;
 				denseMatrix[rIdx + 1][rIdx + 1] += alpha;
@@ -256,15 +611,21 @@ inline void buildProblem(const PairInfo &pair, const std::vector<cv::Point2d> &v
 		cv::line(squareMask, cv::Point(0, 0), cv::Point(squareMask.cols - 1, squareMask.rows - 1), cv::Scalar(1));
 		cv::line(squareMask, cv::Point(squareMask.cols - 1, 0), cv::Point(0, squareMask.rows - 1), cv::Scalar(2));
 		
+		const cv::Mat &image1 = images[pair.index1];
+		cv::Rect image1Roi(0, 0, image1.cols, image1.rows);
+
 		cv::Size extSize(gridSize.width * gridDim.x, gridSize.height * gridDim.y);
+		extSize.width = image1Roi.width > extSize.width ? image1Roi.width : extSize.width;
+		extSize.height = image1Roi.height > extSize.height ? image1Roi.height : extSize.height;
+
 		cv::Mat extMask(extSize, CV_8UC1, cv::Scalar(0));
 		cv::Mat extImg(extSize, CV_8UC3, cv::Scalar(0));
 
-		const cv::Mat &image1 = images[pair.index1];
-		cv::Rect image1Roi(0, 0, image1.cols, image1.rows);
 		cv::rectangle(extMask, image1Roi, cv::Scalar(255), -1);
 		image1.copyTo(extImg(image1Roi));
 
+		//Notice that the order of quadrangle in here is 0 1 2 3 followed clockwise.
+		//But in other place , the clockwise index order is 0 1 3 2
 		const int vTriangles[8][3] = {
 			{ 0, 2, 3 },
 			{ 2, 3, 0 },
@@ -356,7 +717,7 @@ inline void buildProblem(const PairInfo &pair, const std::vector<cv::Point2d> &v
 					cv::Point2f R90pt23(pt23.y, -pt23.x);
 					double v = pt21.dot(R90pt23) / R90pt23.dot(R90pt23);
 
-					double ws = vCovL2Value[m / 2] + 50;
+					double ws = std::max(vCovL2Value[m / 2] , 100.0);
 
 					std::vector<int> vParamIdx(5, 0);
 					std::vector<double>  vCoeff(5, 0);
@@ -403,14 +764,33 @@ inline void buildProblem(const PairInfo &pair, const std::vector<cv::Point2d> &v
 		for (size_t j = 0; j < paramNum; j++)
 			if (denseMatrix[i][j])
 				vTriplet.push_back(Eigen::Triplet<double>(i, j, denseMatrix[i][j]));
+
+#if defined(BUILDPROBLEMDEBUG) && (defined(_DEBUG) || defined(DEBUG))
+	cv::Mat AImage(paramNum, paramNum, CV_32FC1, cv::Scalar(0));
+	for (size_t i = 0; i < vTriplet.size(); i++)
+	{
+		AImage.at<float>(vTriplet[i].row(), vTriplet[i].col()) = vTriplet[i].value();
+	}
+
+	cv::Mat bImage(paramNum, 1, CV_32FC1, cv::Scalar(0));
+	for (size_t i = 0; i < paramNum; i++)
+	{
+		bImage.at<float>(i, 0) = b[i];
+	}
+#endif // BUILDPROBLEMDEBUG
+	
 }
 
 
 //Estimate the warped vertices of the grid
-//gamma, alpha, and beta are same with buildProblem
+//gamma : control the weight of point-correspond constraint
+//alpha : control the weight of preset vertices constraint
+//beta  : control the weight of shape constraint which is inroduced from content-preserving warp
+//forceAlpha : force the preset vertices constraint which will not be ignored by pair points
 inline void EstimateGridVertices(const PairInfo &pair, const cv::Mat &presetH, cv::Point gridDim,
-						  cv::Size gridSize, const std::vector<cv::Mat> &images,
-						  std::vector<cv::Point2d> &vVertices, double gamma = 1, double alpha = 1e-4, double beta = 1e-5)
+								 cv::Size gridSize, const std::vector<cv::Mat> &images,
+								 std::vector<cv::Point2d> &vVertices, double gamma = 1, double alpha = 1e-4,
+								double beta = 1e-5, bool forceAlpha = false)
 {
 	int verticeNum = (gridDim.x + 1) * (gridDim.y + 1), paramNum = verticeNum * 2;
 	std::vector<Eigen::Triplet<double>> vTriplet;
@@ -425,7 +805,7 @@ inline void EstimateGridVertices(const PairInfo &pair, const cv::Mat &presetH, c
 			HL_CERR("Failed to Transform point by Homograph Matrix");
 	}
 
-	buildProblem(pair, vPresetVert, images, gridDim, gridSize, vTriplet, b, gamma, alpha, beta);
+	buildProblem(pair, vPresetVert, images, gridDim, gridSize, vTriplet, b, gamma, alpha, beta, forceAlpha);
 
 	Eigen::SparseMatrix<double> A(paramNum, paramNum);
 	A.setFromTriplets(vTriplet.begin(), vTriplet.end());
@@ -450,3 +830,41 @@ inline void EstimateGridVertices(const PairInfo &pair, const cv::Mat &presetH, c
 
 }
 
+
+//Stitching the two images use the global Homography Matrix
+inline void GlobalHStitching(const cv::Mat &src1, const cv::Mat &mask1, const cv::Mat &src2, const cv::Mat &mask2,
+							 const cv::Mat &H, cv::Mat &dst, cv::Mat &maskDst)
+{
+	cv::Point gridDim(1, 1);
+	cv::Size gridSize(src1.cols, src1.rows);
+	int verticeNum = (gridDim.x + 1) * (gridDim.y + 1);
+	std::vector<cv::Point2d> vVertices(verticeNum);
+
+	for (size_t i = 0; i < verticeNum; i++)
+	{
+		int r = i / (gridDim.x + 1), c = i - r * (gridDim.x + 1);
+		cv::Point2d vertPt(c * gridSize.width, r * gridSize.height);
+		if (!PointHTransform(vertPt, H, vVertices[i]))
+			HL_CERR("Failed to Transform point by Homograph Matrix");
+	}
+
+	/*cv::Mat gridResult = src2.clone() * 0.6;
+	DrawGridVertices(gridResult, vVertices, gridDim, 2, 3);
+	cv::imwrite("gridResultGlobal.jpg", gridResult);*/
+
+	cv::Mat warpedResult, warpedMask;
+	cv::Rect warpedROI;
+	GridWarping(src1, mask1, gridDim, gridSize, vVertices, warpedResult, warpedMask, warpedROI);
+	std::vector<cv::Mat> vPreparedImg, vPreparedMask;
+	std::vector<cv::Rect> vROI;
+
+	vPreparedImg.push_back(src2);
+	vPreparedMask.push_back(mask2);
+	vROI.push_back(cv::Rect(0, 0, src2.cols, src2.rows));
+
+	vPreparedImg.push_back(warpedResult);
+	vPreparedMask.push_back(warpedMask);
+	vROI.push_back(warpedROI);
+
+	AverageMerge(vPreparedImg, vPreparedMask, vROI, dst, maskDst);
+}

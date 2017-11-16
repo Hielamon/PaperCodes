@@ -150,12 +150,12 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClInclude Include="..\common\stitchingCommonFuc.h" />
+    <ClInclude Include="..\common\SequenceMatcher.h" />
     <ClInclude Include="SequenceMatcher.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="..\common\SequenceMatcher.cpp" />
     <ClCompile Include="PTISMain.cpp" />
-    <ClCompile Include="SequenceMatcher.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Text Include="Readme.txt" />

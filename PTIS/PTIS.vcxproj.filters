@@ -18,7 +18,7 @@
     <ClInclude Include="SequenceMatcher.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\common\stitchingCommonFuc.h">
+    <ClInclude Include="..\common\SequenceMatcher.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
@@ -26,7 +26,7 @@
     <ClCompile Include="PTISMain.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="SequenceMatcher.cpp">
+    <ClCompile Include="..\common\SequenceMatcher.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
