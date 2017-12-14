@@ -2,8 +2,10 @@
 #define MAIN_FILE
 #include <commonMacro.h>
 
+
 int main(int argc, char *argv[])
 {
+	//test();
 	cv::Mat square(50, 50, CV_8UC1, cv::Scalar(0));
 	cv::line(square, cv::Point(0, 0), cv::Point(square.cols - 1, square.rows - 1), cv::Scalar(100));
 	cv::line(square, cv::Point(square.cols - 1, 0), cv::Point(0, square.rows - 1), cv::Scalar(200));

@@ -19,9 +19,9 @@
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{1F6A357B-E439-4A8D-9466-DAF8E526F705}</ProjectGuid>
+    <ProjectGuid>{94C69314-D15F-4F32-A72A-06863D26384F}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
-    <RootNamespace>AnimateTransform</RootNamespace>
+    <RootNamespace>SeamShow</RootNamespace>
     <WindowsTargetPlatformVersion>8.1</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -69,8 +69,8 @@
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-    <Import Project="..\OpenCV320_x64_Release_VS15.props" />
     <Import Project="..\Eigen333.props" />
+    <Import Project="..\OpenCV320_x64_Release_VS15.props" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
@@ -151,11 +151,10 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\common\SequenceMatcher.cpp" />
-    <ClCompile Include="AnimateTransformMain.cpp" />
+    <ClCompile Include="SeamShowMain.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\common\SequenceMatcher.h" />
-    <ClInclude Include="AnimateTransform.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

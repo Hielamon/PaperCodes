@@ -524,7 +524,7 @@ inline cv::Rect AverageMerge(const std::vector<cv::Mat> &vImage, const std::vect
 	return resultROI;
 }
 
-#define BUILDPROBLEMDEBUG
+#define BUILDPROBLEMDEBUG 1
 //Get the vertice warp problem's sparse matrix elements vTriplet and b
 //vPresetVert is the preset of vertices , it is always set according the global Homography Matrix
 //gamma : control the weight of point-correspond constraint

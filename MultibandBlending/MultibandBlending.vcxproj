@@ -19,9 +19,9 @@
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{1F6A357B-E439-4A8D-9466-DAF8E526F705}</ProjectGuid>
+    <ProjectGuid>{193D6700-0F87-4CFC-BB0D-74C4A80B4FE4}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
-    <RootNamespace>AnimateTransform</RootNamespace>
+    <RootNamespace>MultibandBlending</RootNamespace>
     <WindowsTargetPlatformVersion>8.1</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -150,12 +150,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="..\common\SequenceMatcher.cpp" />
-    <ClCompile Include="AnimateTransformMain.cpp" />
-  </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="..\common\SequenceMatcher.h" />
-    <ClInclude Include="AnimateTransform.h" />
+    <ClCompile Include="MultibandBlendingMain.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

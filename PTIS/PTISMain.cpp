@@ -294,7 +294,7 @@ void buildProblemTest(const PairInfo &pair, const cv::Mat &H, cv::Size cellNum, 
 int main(int argc, char *argv[])
 {
 	std::vector<cv::Mat> images;
-	std::string dir = "test3";
+	std::string dir = "test5";
 	if (argc == 2)
 		dir = std::string(argv[1]);
 	LoadSameSizeImages(images, dir);
@@ -354,7 +354,7 @@ int main(int argc, char *argv[])
 	}
 	else
 	{
-		EstimateGridVertices(firstPair, globalH, gridDim, gridSize, images, vVertices, 30.0);
+		EstimateGridVertices(firstPair, globalH, gridDim, gridSize, images, vVertices, 3);
 	}
 
 	{

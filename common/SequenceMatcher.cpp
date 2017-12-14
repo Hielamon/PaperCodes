@@ -339,6 +339,7 @@ float SequenceMatcher::_getInlierRate(const std::vector<char>& inliers)
 	return n / (float)inliers.size();
 }
 
+//Draw the Pair Infos for inputs
 void DrawPairInfos(std::vector<cv::Mat> &images, std::list<PairInfo> &pairinfos, bool onlyPoints, double scale)
 {
 	size_t pair_num = pairinfos.size();
@@ -381,6 +382,7 @@ void DrawPairInfos(std::vector<cv::Mat> &images, std::list<PairInfo> &pairinfos,
 	}
 }
 
+//The draw function for checking the validation of Homograph
 void DrawPairInfoHomo(const std::vector<cv::Mat> &images, const PairInfo &pairinfos, const cv::Mat &H)
 {
 	int index0 = pairinfos.index1, index1 = pairinfos.index2;
