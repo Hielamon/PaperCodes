@@ -151,7 +151,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="..\common\SequenceMatcher.h" />
-    <ClInclude Include="SequenceMatcher.h" />
+    <ClInclude Include="..\common\stitchingCommonFuc.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\common\SequenceMatcher.cpp" />

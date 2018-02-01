@@ -315,7 +315,7 @@ int main(int argc, char *argv[])
 	cv::Point gridDim(cellNum.width, cellNum.height);
 	std::vector<cv::Point2d> vVertices;
 
-	bool forTest = false;
+	bool forTest = false, fixTest = true;
 	if(forTest)
 	{
 		int verticeNum = (cellNum.width + 1) * (cellNum.height + 1), paramNum = verticeNum * 2;
@@ -352,9 +352,26 @@ int main(int argc, char *argv[])
 				HL_CERR("result " << pIdx << " is not valid");
 		}
 	}
+	else if (fixTest)
+	{
+		int verticeNum = (gridDim.x + 1) * (gridDim.y + 1);
+		std::vector<cv::Point2d> vPresetVert(verticeNum);
+		std::vector<bool> vFixMask(verticeNum);
+		for (size_t i = 0; i < verticeNum; i++)
+		{
+			int r = i / (gridDim.x + 1), c = i - r * (gridDim.x + 1);
+			cv::Point2d vertPt(c * gridSize.width, r * gridSize.height);
+			if (!PointHTransform(vertPt, globalH, vPresetVert[i]))
+				HL_CERR("Failed to Transform point by Homograph Matrix");
+
+			vFixMask[i] = (c == gridDim.x || r == gridDim.y) ? true : false;
+		}
+
+		EstimateGridVertices(firstPair, vPresetVert, vFixMask, gridDim, gridSize, images, vVertices, 3, 0.00001);
+	}
 	else
 	{
-		EstimateGridVertices(firstPair, globalH, gridDim, gridSize, images, vVertices, 3);
+		EstimateGridVertices(firstPair, globalH, gridDim, gridSize, images, vVertices, 3, 0.00001);
 	}
 
 	{

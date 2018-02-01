@@ -37,6 +37,8 @@ inline void HomographMapping(cv::Mat Hinv, cv::Rect srcROI, cv::Rect dstROI,
 			}
 		}
 	}
+
+	
 }
 
 //GridMapping function which is used to mapping the grid
@@ -826,6 +828,114 @@ inline void EstimateGridVertices(const PairInfo &pair, const cv::Mat &presetH, c
 		vVertices[i].y = x[pIdx + 1];
 		if (isnan(x[pIdx]) || isnan(x[pIdx + 1]))
 			HL_CERR("x " << pIdx << " is not valid");
+	}
+
+}
+
+
+//Estimate the warped vertices of the grid with Preset Points and fixation mask
+//vPresetVert £º the preset position of grid poings
+//vFixMask : the mask indicate which points will be fixed to the preset position during the Estimation,
+//           'True' means that the corresponding point is fixed.
+//gamma : control the weight of point-correspond constraint
+//alpha : control the weight of preset vertices constraint
+//beta  : control the weight of shape constraint which is inroduced from content-preserving warp
+//forceAlpha : force the preset vertices constraint which will not be ignored by pair points
+inline void EstimateGridVertices(const PairInfo &pair, const std::vector<cv::Point2d> &vPresetVert, 
+								 const std::vector<bool> &vFixMask, cv::Point gridDim,
+								 cv::Size gridSize, const std::vector<cv::Mat> &images,
+								 std::vector<cv::Point2d> &vVertices, double gamma = 1, double alpha = 1e-4,
+								 double beta = 1e-5, bool forceAlpha = false)
+{
+	int verticeNum = (gridDim.x + 1) * (gridDim.y + 1), paramNum = verticeNum * 2;
+
+	if (verticeNum != vFixMask.size() || verticeNum != vPresetVert.size())
+		HL_CERR("The verticeNum(" << verticeNum << ") is not equal to the size of vFixMask("
+				<< vFixMask.size() << ") or vPresetVert(" << vPresetVert.size() << ")");
+
+	std::vector<Eigen::Triplet<double>> vTriplet;
+	Eigen::VectorXd b(paramNum);
+	buildProblem(pair, vPresetVert, images, gridDim, gridSize, vTriplet, b, gamma, alpha, beta, forceAlpha);
+
+	int freePtNum = 0;
+	std::for_each(vFixMask.begin(), vFixMask.end(), [&](const bool &isFixed) {freePtNum += (isFixed ? 0 : 1); });
+
+	int freeParamNum = freePtNum * 2;
+	Eigen::VectorXd freeB(freeParamNum), freeX(freeParamNum);
+	std::vector<int> vAuxIndex(paramNum);
+	for (size_t i = 0, pIdx = 0, fIdx = 0; i < verticeNum; i++, pIdx += 2)
+	{
+		if (vFixMask[i])
+		{
+			vAuxIndex[pIdx] = -1;
+			vAuxIndex[pIdx + 1] = -1;
+		}
+		else
+		{
+			vAuxIndex[pIdx] = fIdx;
+			vAuxIndex[pIdx + 1] = fIdx + 1;
+
+			freeB[fIdx] = b[pIdx];
+			freeB[fIdx + 1] = b[pIdx + 1];
+			fIdx += 2;
+		}
+	}
+
+	Eigen::SparseMatrix<double> freeA(freeParamNum, freeParamNum);
+	
+	std::vector<Eigen::Triplet<double>> vFreeTriplet;
+	std::for_each(vTriplet.begin(), vTriplet.end(), [&](Eigen::Triplet<double> &triplet) {
+		int r = triplet.row(), c = triplet.col();
+		double v = triplet.value();
+
+		int ptR = r / 2, ptC = c / 2;
+
+		if (vFixMask[ptR] || vFixMask[ptC])
+		{
+			if (!vFixMask[ptR])
+			{
+				int fIdx = vAuxIndex[r];
+				assert(fIdx != -1);
+				double presetV = c % 2 == 0 ? vPresetVert[ptC].x : vPresetVert[ptC].y;
+				freeB[fIdx] -= (v*presetV);
+			}
+		}
+		else
+		{
+			Eigen::Triplet<double> triplet_ = triplet;
+			int fIdxR = vAuxIndex[r], fIdxC = vAuxIndex[c];
+			if (fIdxC == -1 || fIdxR == -1)
+				HL_CERR("Error : Invalid fidx row(" << fIdxR << ") and col(" << fIdxC << ")");
+
+			vFreeTriplet.push_back(Eigen::Triplet<double>(fIdxR, fIdxC, v));
+		}
+			
+	});
+
+	freeA.setFromTriplets(vFreeTriplet.begin(), vFreeTriplet.end());
+
+	Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver;
+	solver.compute(freeA);
+	if (solver.info() != Eigen::Success)
+		HL_CERR("Failed to compute sparse Matrix");
+
+	freeX = solver.solve(freeB);
+	if (solver.info() != Eigen::Success)
+		HL_CERR("Failed to solve the result");
+
+	vVertices.resize(verticeNum);
+	for (int i = 0, pIdx = 0; i < verticeNum; i++)
+	{
+		if (!vFixMask[i])
+		{
+			vVertices[i].x = freeX[pIdx];
+			vVertices[i].y = freeX[pIdx + 1];
+			if (isnan(freeX[pIdx]) || isnan(freeX[pIdx + 1]))
+				HL_CERR("x " << pIdx << " is not valid");
+			pIdx += 2;
+		}
+		else
+			vVertices[i] = vPresetVert[i];
 	}
 
 }

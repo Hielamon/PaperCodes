@@ -15,10 +15,10 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="SequenceMatcher.h">
+    <ClInclude Include="..\common\SequenceMatcher.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\common\SequenceMatcher.h">
+    <ClInclude Include="..\common\stitchingCommonFuc.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
