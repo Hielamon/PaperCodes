@@ -396,7 +396,11 @@ int main(int argc, char *argv[])
 	
 	cv::Mat warpedResult, warpedMask;
 	cv::Rect warpedROI;
-	GridWarping(image1, cv::Mat(), gridDim, gridSize, vVertices, warpedResult, warpedMask, warpedROI);
+	//GridWarping(image1, cv::Mat(), gridDim, gridSize, vVertices, warpedResult, warpedMask, warpedROI);
+	cv::Mat dstMap, srcMap, map1, map2;
+	BuildGridWarpMap(image1, cv::Mat(), gridDim, gridSize, vVertices, dstMap, srcMap, warpedMask, warpedROI, true);
+	cv::convertMaps(dstMap, cv::Mat(), map1, map2, CV_16SC2);
+	cv::remap(image1, warpedResult, map1, map2, cv::INTER_LINEAR);
 	cv::imwrite("warpedResult.jpg", warpedResult);
 	cv::imwrite("warpedMask.jpg", warpedMask);
 
