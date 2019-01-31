@@ -148,10 +148,10 @@ int SeamShowWithRealImage(int argc, char *argv[])
 {
 	std::vector<cv::Mat> images;
 	//std::string dir = "HomographDecomposeDIR1";
-	std::string dir = "test4";
+	std::string dir = "test6";
 	if (argc == 2)
 		dir = std::string(argv[1]);
-	LoadSameSizeImages(images, dir);
+	LoadSameSizeImages(images, dir, "JPG");
 
 	
 
@@ -291,7 +291,7 @@ int SeamShowWithRealImage(int argc, char *argv[])
 	return 0;
 }
 
-int main(int argc, char *argv[])
+int SeamShowWithManualData()
 {
 	cv::Ptr<cv::detail::SeamFinder> seam_finder = cv::makePtr<cv::detail::GraphCutSeamFinder>(cv::detail::GraphCutSeamFinderBase::COST_COLOR);
 
@@ -312,7 +312,7 @@ int main(int argc, char *argv[])
 			int index = i * 3 + j;
 			setImg1.at<cv::Vec3b>(i, j) = cv::Vec3b(_setImg1[index], _setImg1[index], _setImg1[index]);
 			setImg2.at<cv::Vec3b>(i, j) = cv::Vec3b(_setImg2[index], _setImg2[index], _setImg2[index]);
-			
+
 			setImg1U.at<uchar>(i, j) = _setImg1[index];
 			setImg2U.at<uchar>(i, j) = _setImg2[index];
 
@@ -320,7 +320,7 @@ int main(int argc, char *argv[])
 	}
 
 	seam_corners[1].x = 1;
-	
+
 	cv::Mat setImg1_(3, 4, CV_8UC3, cv::Scalar(255, 255, 255));
 	setImg1.copyTo(setImg1_(cv::Rect(1, 0, 3, 3)));
 	cv::Mat setImg2_(3, 4, CV_8UC3, cv::Scalar(255, 255, 255));
@@ -338,7 +338,12 @@ int main(int argc, char *argv[])
 
 	seam_masks_warped[0].copyTo(seam_masks_mat1);
 	seam_masks_warped[1].copyTo(seam_masks_mat2);
+}
 
+int main(int argc, char *argv[])
+{
+	
+	SeamShowWithRealImage(argc, argv);
 
 	return 0;
 }

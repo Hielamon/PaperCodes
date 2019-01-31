@@ -5,6 +5,7 @@
 #include <commonMacro.h>
 #include <algorithm>
 #include "SequenceMatcher.h"
+#include <commonMacro.h>
 
 //The Mapping function use the inverse Homograph matrix
 inline void HomographMapping(cv::Mat Hinv, cv::Rect srcROI, cv::Rect dstROI,
@@ -1133,7 +1134,7 @@ inline void EstimateGridVertices(const PairInfo &pair, const cv::Mat &presetH, c
 	int verticeNum = (gridDim.x + 1) * (gridDim.y + 1), paramNum = verticeNum * 2;
 	std::vector<Eigen::Triplet<double>> vTriplet;
 	Eigen::VectorXd b(paramNum), x(paramNum);
-
+	 
 	std::vector<cv::Point2d> vPresetVert(verticeNum);
 	for (size_t i = 0; i < verticeNum; i++)
 	{
@@ -1145,8 +1146,14 @@ inline void EstimateGridVertices(const PairInfo &pair, const cv::Mat &presetH, c
 
 	buildGridWarpProblem(pair, vPresetVert, images, gridDim, gridSize, vTriplet, b, gamma, alpha, beta, forceAlpha);
 
+
 	Eigen::SparseMatrix<double> A(paramNum, paramNum);
 	A.setFromTriplets(vTriplet.begin(), vTriplet.end());
+
+	std::cout << "Matrix = (" << paramNum << "*" << paramNum << ")" << std::endl;
+
+	HL_INTERVAL_START;
+
 
 	Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver;
 	solver.compute(A);
@@ -1156,6 +1163,8 @@ inline void EstimateGridVertices(const PairInfo &pair, const cv::Mat &presetH, c
 	x = solver.solve(b);
 	if (solver.info() != Eigen::Success)
 		HL_CERR("Failed to solve the result");
+
+	HL_INTERVAL_ENDSTR("Solve LLT")
 
 	vVertices.resize(verticeNum);
 	for (int i = 0, pIdx = 0; i < verticeNum; i++, pIdx += 2)

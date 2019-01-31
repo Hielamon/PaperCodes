@@ -294,7 +294,7 @@ void buildProblemTest(const PairInfo &pair, const cv::Mat &H, cv::Size cellNum, 
 int main(int argc, char *argv[])
 {
 	std::vector<cv::Mat> images;
-	std::string dir = "test5";
+	std::string dir = "test4";
 	if (argc == 2)
 		dir = std::string(argv[1]);
 	LoadSameSizeImages(images, dir);
@@ -315,7 +315,7 @@ int main(int argc, char *argv[])
 	cv::Point gridDim(cellNum.width, cellNum.height);
 	std::vector<cv::Point2d> vVertices;
 
-	bool forTest = false, fixTest = true;
+	bool forTest = false, fixTest = !true;
 	if(forTest)
 	{
 		int verticeNum = (cellNum.width + 1) * (cellNum.height + 1), paramNum = verticeNum * 2;
